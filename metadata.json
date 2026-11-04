@@ -1,0 +1,6 @@
+{
+  "name": "Lumina CineClub - Rede Social para Cinéfilos",
+  "description": "Rede social cinematográfica: cadastre seus filmes favoritos, visite perfis de outros cinéfilos, avalie e troque opiniões e recados com a comunidade.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
