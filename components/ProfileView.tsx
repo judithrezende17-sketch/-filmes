@@ -6,7 +6,7 @@ import { MovieCard } from './MovieCard';
 import { Guestbook } from './Guestbook';
 import { 
   Plus, Edit3, Film, Star, Heart, MessageSquare, ArrowLeft, 
-  Sparkles, Filter, CheckCircle2, UserCheck, Shield 
+  Sparkles, Filter, CheckCircle2, UserCheck, Shield, Camera 
 } from 'lucide-react';
 
 interface ProfileViewProps {
@@ -146,13 +146,23 @@ export function ProfileView({
           <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 -mt-16 sm:-mt-20">
             {/* Avatar & Identifiers */}
             <div className="flex flex-col sm:flex-row items-center sm:items-end gap-4 text-center sm:text-left">
-              <div className="relative w-28 h-28 sm:w-32 sm:h-32 rounded-2xl overflow-hidden border-2 border-[#00D2FF] shadow-[0_0_28px_rgba(0,210,255,0.4)] flex-shrink-0 bg-[#060D0B]">
+              <div className="relative w-28 h-28 sm:w-32 sm:h-32 rounded-2xl overflow-hidden border-2 border-[#00D2FF] shadow-[0_0_28px_rgba(0,210,255,0.4)] flex-shrink-0 bg-[#060D0B] group">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src={viewedUser.avatar}
                   alt={viewedUser.name}
                   className="w-full h-full object-cover"
                 />
+                {isOwnProfile && (
+                  <button
+                    onClick={onOpenEditProfileModal}
+                    className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center text-[#00D2FF] gap-1 cursor-pointer"
+                    title="Alterar foto de perfil"
+                  >
+                    <Camera className="w-6 h-6" />
+                    <span className="text-[10px] font-bold text-white tracking-wider uppercase">Alterar Foto</span>
+                  </button>
+                )}
               </div>
 
               <div className="space-y-1">

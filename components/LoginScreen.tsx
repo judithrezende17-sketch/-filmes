@@ -1,14 +1,22 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { User } from '@/types';
-import { Film, Sparkles, UserPlus, LogIn, ShieldCheck, Check, Star, MessageSquare, Clapperboard, Heart } from 'lucide-react';
+import { supabaseService } from '@/services/supabaseService';
+import { getSupabaseCredentials, setSupabaseCustomCredentials, cleanAsciiString } from '@/lib/supabase';
+import { processImageFile } from '@/lib/utils';
+import { 
+  Film, Sparkles, UserPlus, LogIn, ShieldCheck, Check, Star, 
+  MessageSquare, Clapperboard, Mail, Lock, Database, Copy, AlertCircle, Eye, EyeOff, Settings2, RefreshCw,
+  X, Key, ExternalLink, HelpCircle, Trash2, Upload, Camera, Image as ImageIcon
+} from 'lucide-react';
 
 interface LoginScreenProps {
   allUsers: User[];
+  onLoginSuccess: (user: User, isSupabase: boolean) => void;
   onLoginAsVisitor: (name: string, bio: string, avatar: string) => void;
-  onRegister: (newUser: User) => void;
   onSelectExistingUser: (user: User) => void;
+  onDeleteUser?: (userId: string) => void;
 }
 
 const AVATAR_PRESETS = [
@@ -40,25 +48,179 @@ const AVATAR_PRESETS = [
 
 export function LoginScreen({
   allUsers,
+  onLoginSuccess,
   onLoginAsVisitor,
-  onRegister,
   onSelectExistingUser,
+  onDeleteUser,
 }: LoginScreenProps) {
-  const [tab, setTab] = useState<'visitor' | 'register' | 'existing'>('visitor');
+  const [tab, setTab] = useState<'email-login' | 'email-register' | 'visitor' | 'existing'>('email-login');
+  const [userToDelete, setUserToDelete] = useState<User | null>(null);
 
-  // Visitor form state
-  const [visitorName, setVisitorName] = useState('Visitante Cinéfilo');
-  const [visitorBio, setVisitorBio] = useState('Explorando os filmes favoritos da comunidade e conhecendo cinéfilos.');
-  const [visitorAvatar, setVisitorAvatar] = useState(AVATAR_PRESETS[0].url);
+  // Email Sign In form state
+  const [loginEmail, setLoginEmail] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [loginLoading, setLoginLoading] = useState(false);
+  const [loginError, setLoginError] = useState('');
 
-  // Register form state
+  // Email Register form state
+  const [regEmail, setRegEmail] = useState('');
+  const [regPassword, setRegPassword] = useState('');
   const [regName, setRegName] = useState('');
   const [regUsername, setRegUsername] = useState('');
   const [regGenre, setRegGenre] = useState('Ficção Científica');
   const [regBio, setRegBio] = useState('');
   const [regAvatar, setRegAvatar] = useState(AVATAR_PRESETS[0].url);
   const [regCustomAvatar, setRegCustomAvatar] = useState('');
+  const [regLoading, setRegLoading] = useState(false);
   const [regError, setRegError] = useState('');
+
+  // Visitor form state
+  const [visitorName, setVisitorName] = useState('Visitante Cinéfilo');
+  const [visitorBio, setVisitorBio] = useState('Explorando os filmes favoritos da comunidade e conhecendo cinéfilos.');
+  const [visitorAvatar, setVisitorAvatar] = useState(AVATAR_PRESETS[0].url);
+
+  // File upload refs & states
+  const regFileInputRef = useRef<HTMLInputElement>(null);
+  const visitorFileInputRef = useRef<HTMLInputElement>(null);
+  const [isUploadingReg, setIsUploadingReg] = useState(false);
+  const [isUploadingVisitor, setIsUploadingVisitor] = useState(false);
+
+  const handleRegFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      setIsUploadingReg(true);
+      const dataUrl = await processImageFile(file, 400, 0.85);
+      setRegAvatar(dataUrl);
+      setRegCustomAvatar('');
+    } catch (err: any) {
+      alert(err.message || 'Erro ao processar imagem.');
+    } finally {
+      setIsUploadingReg(false);
+    }
+  };
+
+  const handleVisitorFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      setIsUploadingVisitor(true);
+      const dataUrl = await processImageFile(file, 400, 0.85);
+      setVisitorAvatar(dataUrl);
+    } catch (err: any) {
+      alert(err.message || 'Erro ao processar imagem.');
+    } finally {
+      setIsUploadingVisitor(false);
+    }
+  };
+
+  // Supabase Info Drawer State
+  const [showSupabaseInfo, setShowSupabaseInfo] = useState(false);
+  const [copiedVar, setCopiedVar] = useState<string | null>(null);
+
+  // Dynamic credentials editing
+  const [inputUrl, setInputUrl] = useState(() => getSupabaseCredentials().url);
+  const [inputKey, setInputKey] = useState(() => getSupabaseCredentials().key);
+  const [credsSaved, setCredsSaved] = useState(false);
+
+  const isConfigured = supabaseService.isConfigured();
+
+  const handleSaveCredentials = (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanU = cleanAsciiString(inputUrl);
+    const cleanK = cleanAsciiString(inputKey);
+    setInputUrl(cleanU);
+    setInputKey(cleanK);
+    setSupabaseCustomCredentials(cleanU, cleanK);
+    setCredsSaved(true);
+    setLoginError('');
+    setRegError('');
+    setTimeout(() => setCredsSaved(false), 3000);
+  };
+
+  const handleResetCredentials = () => {
+    setSupabaseCustomCredentials('', '');
+    const reset = getSupabaseCredentials();
+    setInputUrl(reset.url);
+    setInputKey(reset.key);
+    setCredsSaved(true);
+    setTimeout(() => setCredsSaved(false), 3000);
+  };
+
+  const handleCopy = (text: string, label: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedVar(label);
+    setTimeout(() => setCopiedVar(null), 2500);
+  };
+
+  const handleEmailSignIn = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoginError('');
+    if (!loginEmail.trim() || !loginPassword.trim()) {
+      setLoginError('Informe seu e-mail e senha.');
+      return;
+    }
+
+    setLoginLoading(true);
+    const result = await supabaseService.signInWithEmail(loginEmail.trim(), loginPassword);
+    setLoginLoading(false);
+
+    if (result.success && result.user) {
+      onLoginSuccess(result.user, result.isSupabaseLive);
+    } else {
+      setLoginError(result.error || 'Credenciais inválidas. Verifique seu e-mail e senha.');
+    }
+  };
+
+  const handleEmailRegister = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setRegError('');
+    if (!regEmail.trim()) {
+      setRegError('Informe um e-mail válido.');
+      return;
+    }
+    if (regPassword.length < 6) {
+      setRegError('A senha deve ter no mínimo 6 caracteres.');
+      return;
+    }
+    if (!regName.trim()) {
+      setRegError('Informe seu nome ou apelido de cinéfilo.');
+      return;
+    }
+
+    const cleanUsername = (regUsername.trim() || regName.toLowerCase().replace(/\s+/g, ''))
+      .replace(/[^a-zA-Z0-9_]/g, '');
+
+    setRegLoading(true);
+    const result = await supabaseService.signUpWithEmail({
+      email: regEmail.trim(),
+      password: regPassword,
+      name: regName.trim(),
+      username: cleanUsername,
+      favoriteGenre: regGenre,
+      bio: regBio.trim() || 'Membro do Lumina CineClub.',
+      avatar: regCustomAvatar.trim() || regAvatar,
+    });
+    setRegLoading(false);
+
+    if (result.success && result.user) {
+      onLoginSuccess(result.user, result.isSupabaseLive);
+    } else {
+      setRegError(result.error || 'Falha ao realizar cadastro no Supabase.');
+    }
+  };
+
+  const handleBypassToLocal = () => {
+    const localUser = supabaseService.createLocalUser({
+      name: regName.trim() || loginEmail.split('@')[0] || 'Cinéfilo',
+      username: regUsername.trim() || loginEmail.split('@')[0] || 'cinéfilo',
+      favoriteGenre: regGenre,
+      bio: regBio.trim() || 'Modo local ativado.',
+      avatar: regAvatar,
+    });
+    onLoginSuccess(localUser, false);
+  };
 
   const handleVisitorSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -67,34 +229,6 @@ export function LoginScreen({
       visitorBio.trim() || 'Visitante no Lumina CineClub.',
       visitorAvatar
     );
-  };
-
-  const handleRegisterSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!regName.trim()) {
-      setRegError('Por favor, informe seu nome ou apelido.');
-      return;
-    }
-
-    const cleanUsername = (regUsername.trim() || regName.toLowerCase().replace(/\s+/g, ''))
-      .replace(/[^a-zA-Z0-9_]/g, '');
-
-    const newUser: User = {
-      id: `user_${Date.now()}`,
-      name: regName.trim(),
-      username: cleanUsername,
-      avatar: regCustomAvatar.trim() || regAvatar,
-      bannerUrl: 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=1200&auto=format&fit=crop&q=80',
-      bio: regBio.trim() || 'Novo membro apaixonado pelo mundo do cinema.',
-      favoriteGenre: regGenre,
-      badge: 'Cinéfilo Membro',
-      joinedDate: 'Hoje',
-      followersCount: 0,
-      followingCount: 3,
-      isGuest: false,
-    };
-
-    onRegister(newUser);
   };
 
   return (
@@ -116,7 +250,7 @@ export function LoginScreen({
                 LUMINA<span className="text-[#00D2FF]">.CINE</span>
               </span>
               <span className="text-[10px] uppercase font-bold tracking-widest px-1.5 py-0.5 rounded bg-[#00D2FF]/10 text-[#00D2FF] border border-[#00D2FF]/20">
-                CLUBE
+                SUPABASE
               </span>
             </div>
             <p className="text-[11px] text-[#94A8A3] tracking-wide">
@@ -125,203 +259,294 @@ export function LoginScreen({
           </div>
         </div>
 
-        <div className="hidden sm:flex items-center gap-4 text-xs text-[#94A8A3]">
-          <span className="flex items-center gap-1.5">
-            <Sparkles className="w-3.5 h-3.5 text-[#00D2FF]" />
-            Cadastre seus Filmes
-          </span>
-          <span>•</span>
-          <span className="flex items-center gap-1.5">
-            <Clapperboard className="w-3.5 h-3.5 text-[#00D2FF]" />
-            Visite Perfis de Amigos
-          </span>
-          <span>•</span>
-          <span className="flex items-center gap-1.5">
-            <MessageSquare className="w-3.5 h-3.5 text-[#00D2FF]" />
-            Mural de Recados
-          </span>
-        </div>
+        {/* Supabase Status Pill */}
+        <button
+          onClick={() => setShowSupabaseInfo(!showSupabaseInfo)}
+          className={`flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-semibold transition-all ${
+            isConfigured
+              ? 'bg-[#00D2FF]/10 border-[#00D2FF]/40 text-[#00D2FF] shadow-[0_0_12px_rgba(0,210,255,0.2)]'
+              : 'bg-[#0D1F1C] border-white/[0.12] text-[#94A8A3] hover:text-[#00D2FF] hover:border-[#00D2FF]/30'
+          }`}
+        >
+          <Database className="w-3.5 h-3.5" />
+          <span>{isConfigured ? 'Supabase Conectado' : 'Configurações Supabase'}</span>
+          <span className={`w-2 h-2 rounded-full ${isConfigured ? 'bg-[#00D2FF] animate-pulse' : 'bg-emerald-400'}`} />
+        </button>
       </header>
 
       {/* Main Login / Gateway Card Container */}
-      <main className="relative z-10 flex-1 flex items-center justify-center px-4 py-8 sm:py-12">
+      <main className="relative z-10 flex-1 flex flex-col items-center justify-center px-4 py-6 sm:py-8">
         <div className="w-full max-w-xl rounded-2xl bg-[#091412] border border-white/[0.12] shadow-[0_24px_70px_rgba(0,0,0,0.85)] overflow-hidden">
           {/* Card Top Title Banner */}
-          <div className="p-6 sm:p-8 pb-4 text-center border-b border-white/[0.08] bg-gradient-to-b from-[#0D1F1C] to-[#091412]">
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#00D2FF]/10 text-[#00D2FF] text-xs font-bold border border-[#00D2FF]/25 mb-3 shadow-[0_0_15px_rgba(0,210,255,0.2)]">
+          <div className="p-6 sm:p-7 pb-4 text-center border-b border-white/[0.08] bg-gradient-to-b from-[#0D1F1C] to-[#091412]">
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#00D2FF]/10 text-[#00D2FF] text-xs font-bold border border-[#00D2FF]/25 mb-2 shadow-[0_0_15px_rgba(0,210,255,0.2)]">
               <Sparkles className="w-3.5 h-3.5" />
-              <span>Bem-vindo à Experiência Cinematográfica</span>
+              <span>Autenticação & Armazenamento Supabase</span>
             </div>
             <h1 className="text-2xl sm:text-3xl font-black text-[#F0FDF8] tracking-tight">
-              Entre no Lumina CineClub
+              Acesso ao Lumina CineClub
             </h1>
-            <p className="text-xs sm:text-sm text-[#94A8A3] mt-2 max-w-md mx-auto leading-relaxed">
-              Crie seu catálogo pessoal de filmes favoritos, explore coleções de outros cinéfilos e deixe suas palavras e recados na comunidade.
+            <p className="text-xs sm:text-sm text-[#94A8A3] mt-1.5 max-w-md mx-auto leading-relaxed">
+              Faça login com seu e-mail, crie sua conta ou entre como visitante para favoritar filmes e deixar recados nos murais.
             </p>
           </div>
 
           {/* Interactive Navigation Tabs */}
-          <div className="grid grid-cols-3 p-2 bg-[#060D0B] border-b border-white/[0.08] text-xs font-semibold">
+          <div className="grid grid-cols-4 p-1.5 bg-[#060D0B] border-b border-white/[0.08] text-[11px] font-semibold">
             <button
-              onClick={() => setTab('visitor')}
-              className={`py-2.5 px-2 rounded-xl flex items-center justify-center gap-1.5 transition-all ${
-                tab === 'visitor'
-                  ? 'bg-[#00D2FF] text-[#060D0B] font-extrabold shadow-[0_0_18px_rgba(0,210,255,0.35)]'
-                  : 'text-[#94A8A3] hover:text-[#F0FDF8]'
-              }`}
-            >
-              <Sparkles className="w-3.5 h-3.5" />
-              <span>Entrar Visitante</span>
-            </button>
-
-            <button
-              onClick={() => setTab('register')}
-              className={`py-2.5 px-2 rounded-xl flex items-center justify-center gap-1.5 transition-all ${
-                tab === 'register'
-                  ? 'bg-[#00D2FF] text-[#060D0B] font-extrabold shadow-[0_0_18px_rgba(0,210,255,0.35)]'
-                  : 'text-[#94A8A3] hover:text-[#F0FDF8]'
-              }`}
-            >
-              <UserPlus className="w-3.5 h-3.5" />
-              <span>Criar Cadastro</span>
-            </button>
-
-            <button
-              onClick={() => setTab('existing')}
-              className={`py-2.5 px-2 rounded-xl flex items-center justify-center gap-1.5 transition-all ${
-                tab === 'existing'
-                  ? 'bg-[#00D2FF] text-[#060D0B] font-extrabold shadow-[0_0_18px_rgba(0,210,255,0.35)]'
+              onClick={() => {
+                setTab('email-login');
+                setLoginError('');
+              }}
+              className={`py-2 px-1.5 rounded-lg flex items-center justify-center gap-1 transition-all ${
+                tab === 'email-login'
+                  ? 'bg-[#00D2FF] text-[#060D0B] font-extrabold shadow-[0_0_14px_rgba(0,210,255,0.35)]'
                   : 'text-[#94A8A3] hover:text-[#F0FDF8]'
               }`}
             >
               <LogIn className="w-3.5 h-3.5" />
-              <span>Contas Prontas</span>
+              <span>Entrar</span>
+            </button>
+
+            <button
+              onClick={() => {
+                setTab('email-register');
+                setRegError('');
+              }}
+              className={`py-2 px-1.5 rounded-lg flex items-center justify-center gap-1 transition-all ${
+                tab === 'email-register'
+                  ? 'bg-[#00D2FF] text-[#060D0B] font-extrabold shadow-[0_0_14px_rgba(0,210,255,0.35)]'
+                  : 'text-[#94A8A3] hover:text-[#F0FDF8]'
+              }`}
+            >
+              <UserPlus className="w-3.5 h-3.5" />
+              <span>Cadastrar</span>
+            </button>
+
+            <button
+              onClick={() => setTab('visitor')}
+              className={`py-2 px-1.5 rounded-lg flex items-center justify-center gap-1 transition-all ${
+                tab === 'visitor'
+                  ? 'bg-[#00D2FF] text-[#060D0B] font-extrabold shadow-[0_0_14px_rgba(0,210,255,0.35)]'
+                  : 'text-[#94A8A3] hover:text-[#F0FDF8]'
+              }`}
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>Visitante</span>
+            </button>
+
+            <button
+              onClick={() => setTab('existing')}
+              className={`py-2 px-1.5 rounded-lg flex items-center justify-center gap-1 transition-all ${
+                tab === 'existing'
+                  ? 'bg-[#00D2FF] text-[#060D0B] font-extrabold shadow-[0_0_14px_rgba(0,210,255,0.35)]'
+                  : 'text-[#94A8A3] hover:text-[#F0FDF8]'
+              }`}
+            >
+              <Clapperboard className="w-3.5 h-3.5" />
+              <span>Perfis Salvos</span>
             </button>
           </div>
 
-          {/* Tab 1: Visitor Instant Login */}
-          {tab === 'visitor' && (
-            <form onSubmit={handleVisitorSubmit} className="p-6 sm:p-8 space-y-5 animate-in fade-in duration-200">
-              <div className="p-4 rounded-xl bg-[#0D1F1C]/80 border border-[#00D2FF]/25 flex items-start gap-3.5">
-                <ShieldCheck className="w-6 h-6 text-[#00D2FF] flex-shrink-0 mt-0.5" />
-                <div className="space-y-1">
-                  <h3 className="text-sm font-bold text-[#F0FDF8]">Modo Visitante Sem Senhas</h3>
-                  <p className="text-xs text-[#94A8A3] leading-relaxed">
-                    Você pode entrar imediatamente agora mesmo! Cadastre seus filmes prediletos, edite, remova e visite as páginas pessoais de outros cinéfilos para deixar comentários em seus murais.
-                  </p>
+          {/* TAB 1: Email Sign In */}
+          {tab === 'email-login' && (
+            <form onSubmit={handleEmailSignIn} className="p-6 sm:p-8 space-y-4 animate-in fade-in duration-200">
+              {loginError && (
+                <div className="p-4 rounded-xl bg-[#FF2E4D]/15 border border-[#FF2E4D]/35 space-y-2.5">
+                  <div className="flex items-start gap-2.5 text-xs text-[#FF2E4D] font-bold">
+                    <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                    <span className="leading-relaxed">{loginError}</span>
+                  </div>
+                  <div className="pt-1 flex flex-col sm:flex-row gap-2">
+                    <button
+                      type="button"
+                      onClick={handleBypassToLocal}
+                      className="py-1.5 px-3 rounded-lg bg-[#00D2FF] text-[#060D0B] font-extrabold text-xs flex items-center justify-center gap-1.5 hover:bg-[#47d6ff] transition-all shadow-md"
+                    >
+                      <Sparkles className="w-3.5 h-3.5" />
+                      <span>Entrar mesmo assim em Modo Local</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowSupabaseInfo(true)}
+                      className="py-1.5 px-3 rounded-lg bg-white/[0.08] text-white hover:text-[#00D2FF] text-xs font-semibold flex items-center justify-center gap-1 transition-all"
+                    >
+                      <Database className="w-3.5 h-3.5" />
+                      <span>Como corrigir chave API</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs font-semibold text-[#94A8A3] mb-1.5">
+                  Endereço de E-mail
+                </label>
+                <div className="relative">
+                  <Mail className="w-4 h-4 text-[#94A8A3] absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    type="email"
+                    required
+                    value={loginEmail}
+                    onChange={(e) => setLoginEmail(e.target.value)}
+                    placeholder="seu.email@exemplo.com"
+                    className="w-full bg-[#060D0B] border border-white/[0.1] rounded-xl pl-10 pr-4 py-2.5 text-sm text-[#F0FDF8] focus:outline-none focus:border-[#00D2FF] focus:shadow-[0_0_14px_rgba(0,210,255,0.2)] transition-all"
+                  />
                 </div>
               </div>
 
               <div>
                 <label className="block text-xs font-semibold text-[#94A8A3] mb-1.5">
-                  Como deseja ser chamado(a) na rede?
+                  Sua Senha
                 </label>
-                <input
-                  type="text"
-                  value={visitorName}
-                  onChange={(e) => setVisitorName(e.target.value)}
-                  placeholder="Ex: Visitante Cinéfilo, João do Cinema, etc."
-                  className="w-full bg-[#060D0B] border border-white/[0.1] rounded-xl px-4 py-3 text-sm text-[#F0FDF8] focus:outline-none focus:border-[#00D2FF] focus:shadow-[0_0_16px_rgba(0,210,255,0.2)] transition-all"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-[#94A8A3] mb-1.5">
-                  Sua frase de apresentação (opcional)
-                </label>
-                <input
-                  type="text"
-                  value={visitorBio}
-                  onChange={(e) => setVisitorBio(e.target.value)}
-                  placeholder="Ex: Apaixonado por ficção científica e clássicos dos anos 70..."
-                  className="w-full bg-[#060D0B] border border-white/[0.1] rounded-xl px-4 py-2.5 text-xs sm:text-sm text-[#F0FDF8] focus:outline-none focus:border-[#00D2FF] transition-all"
-                />
-              </div>
-
-              {/* Avatar Selector */}
-              <div>
-                <label className="block text-xs font-semibold text-[#94A8A3] mb-2">
-                  Escolha seu Avatar de Visitante
-                </label>
-                <div className="grid grid-cols-6 gap-2">
-                  {AVATAR_PRESETS.map((p, idx) => (
-                    <button
-                      key={idx}
-                      type="button"
-                      onClick={() => setVisitorAvatar(p.url)}
-                      className={`relative aspect-square rounded-xl overflow-hidden border-2 transition-all ${
-                        visitorAvatar === p.url
-                          ? 'border-[#00D2FF] scale-105 shadow-[0_0_14px_rgba(0,210,255,0.45)]'
-                          : 'border-transparent opacity-65 hover:opacity-100'
-                      }`}
-                    >
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={p.url} alt={p.name} className="w-full h-full object-cover" />
-                      {visitorAvatar === p.url && (
-                        <div className="absolute inset-0 bg-[#00D2FF]/25 flex items-center justify-center">
-                          <Check className="w-4 h-4 text-white drop-shadow" />
-                        </div>
-                      )}
-                    </button>
-                  ))}
+                <div className="relative">
+                  <Lock className="w-4 h-4 text-[#94A8A3] absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    required
+                    value={loginPassword}
+                    onChange={(e) => setLoginPassword(e.target.value)}
+                    placeholder="••••••••"
+                    className="w-full bg-[#060D0B] border border-white/[0.1] rounded-xl pl-10 pr-10 py-2.5 text-sm text-[#F0FDF8] focus:outline-none focus:border-[#00D2FF] focus:shadow-[0_0_14px_rgba(0,210,255,0.2)] transition-all"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-[#94A8A3] hover:text-white"
+                  >
+                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
                 </div>
               </div>
 
               <div className="pt-2">
                 <button
                   type="submit"
-                  className="w-full py-3.5 px-5 rounded-xl bg-[#00D2FF] hover:bg-[#47d6ff] text-[#060D0B] font-black text-sm shadow-[0_0_24px_rgba(0,210,255,0.4)] hover:shadow-[0_0_32px_rgba(0,210,255,0.6)] transform hover:scale-[1.01] active:scale-95 transition-all flex items-center justify-center gap-2"
+                  disabled={loginLoading}
+                  className="w-full py-3.5 px-5 rounded-xl bg-[#00D2FF] hover:bg-[#47d6ff] text-[#060D0B] font-black text-sm shadow-[0_0_24px_rgba(0,210,255,0.4)] hover:shadow-[0_0_32px_rgba(0,210,255,0.6)] transform hover:scale-[1.01] active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
                 >
-                  <Sparkles className="w-4 h-4" />
-                  <span>Entrar Agora como Visitante</span>
+                  <LogIn className="w-4 h-4" />
+                  <span>{loginLoading ? 'Conectando ao Supabase...' : 'Entrar com E-mail'}</span>
                 </button>
+              </div>
+
+              <div className="text-center pt-2">
+                <p className="text-xs text-[#94A8A3]">
+                  Ainda não tem conta?{' '}
+                  <button
+                    type="button"
+                    onClick={() => setTab('email-register')}
+                    className="text-[#00D2FF] font-bold hover:underline"
+                  >
+                    Cadastre-se com e-mail aqui
+                  </button>
+                </p>
               </div>
             </form>
           )}
 
-          {/* Tab 2: New Registration */}
-          {tab === 'register' && (
-            <form onSubmit={handleRegisterSubmit} className="p-6 sm:p-8 space-y-4 max-h-[70vh] overflow-y-auto animate-in fade-in duration-200">
+          {/* TAB 2: Email Sign Up */}
+          {tab === 'email-register' && (
+            <form onSubmit={handleEmailRegister} className="p-6 sm:p-8 space-y-3.5 max-h-[70vh] overflow-y-auto animate-in fade-in duration-200">
               {regError && (
-                <div className="p-3 rounded-lg bg-[#FF2E4D]/15 border border-[#FF2E4D]/30 text-xs text-[#FF2E4D] font-semibold">
-                  {regError}
+                <div className="p-4 rounded-xl bg-[#FF2E4D]/15 border border-[#FF2E4D]/35 space-y-2.5">
+                  <div className="flex items-start gap-2.5 text-xs text-[#FF2E4D] font-bold">
+                    <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                    <span className="leading-relaxed">{regError}</span>
+                  </div>
+                  <div className="pt-1 flex flex-col sm:flex-row gap-2">
+                    <button
+                      type="button"
+                      onClick={handleBypassToLocal}
+                      className="py-1.5 px-3 rounded-lg bg-[#00D2FF] text-[#060D0B] font-extrabold text-xs flex items-center justify-center gap-1.5 hover:bg-[#47d6ff] transition-all shadow-md"
+                    >
+                      <Sparkles className="w-3.5 h-3.5" />
+                      <span>Continuar com este cadastro em Modo Local</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowSupabaseInfo(true)}
+                      className="py-1.5 px-3 rounded-lg bg-white/[0.08] text-white hover:text-[#00D2FF] text-xs font-semibold flex items-center justify-center gap-1 transition-all"
+                    >
+                      <Database className="w-3.5 h-3.5" />
+                      <span>Ver instrução da chave anon</span>
+                    </button>
+                  </div>
                 </div>
               )}
 
-              <div>
-                <label className="block text-xs font-semibold text-[#94A8A3] mb-1">
-                  Seu Nome Completo *
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={regName}
-                  onChange={(e) => {
-                    setRegName(e.target.value);
-                    if (!regUsername) {
-                      setRegUsername(e.target.value.toLowerCase().replace(/\s+/g, ''));
-                    }
-                  }}
-                  placeholder="Ex: Judith Rezende"
-                  className="w-full bg-[#060D0B] border border-white/[0.1] rounded-lg px-3.5 py-2.5 text-sm text-[#F0FDF8] focus:outline-none focus:border-[#00D2FF]"
-                />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-[#94A8A3] mb-1">
+                    E-mail do Usuário *
+                  </label>
+                  <div className="relative">
+                    <Mail className="w-3.5 h-3.5 text-[#94A8A3] absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <input
+                      type="email"
+                      required
+                      value={regEmail}
+                      onChange={(e) => setRegEmail(e.target.value)}
+                      placeholder="seu.email@exemplo.com"
+                      className="w-full bg-[#060D0B] border border-white/[0.1] rounded-lg pl-9 pr-3 py-2 text-xs sm:text-sm text-[#F0FDF8] focus:outline-none focus:border-[#00D2FF]"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-[#94A8A3] mb-1">
+                    Senha de Acesso (min 6 carac.) *
+                  </label>
+                  <div className="relative">
+                    <Lock className="w-3.5 h-3.5 text-[#94A8A3] absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <input
+                      type="password"
+                      required
+                      value={regPassword}
+                      onChange={(e) => setRegPassword(e.target.value)}
+                      placeholder="••••••••"
+                      className="w-full bg-[#060D0B] border border-white/[0.1] rounded-lg pl-9 pr-3 py-2 text-xs sm:text-sm text-[#F0FDF8] focus:outline-none focus:border-[#00D2FF]"
+                    />
+                  </div>
+                </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-[#94A8A3] mb-1">
-                  Nome de Usuário (@handle público)
-                </label>
-                <div className="flex items-center">
-                  <span className="px-3.5 py-2.5 rounded-l-lg bg-[#0D1F1C] border border-r-0 border-white/[0.1] text-xs text-[#94A8A3]">
-                    @
-                  </span>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-[#94A8A3] mb-1">
+                    Nome Completo *
+                  </label>
                   <input
                     type="text"
-                    value={regUsername}
-                    onChange={(e) => setRegUsername(e.target.value)}
-                    placeholder="judithfilmes"
-                    className="w-full bg-[#060D0B] border border-white/[0.1] rounded-r-lg px-3.5 py-2.5 text-sm text-[#F0FDF8] focus:outline-none focus:border-[#00D2FF]"
+                    required
+                    value={regName}
+                    onChange={(e) => {
+                      setRegName(e.target.value);
+                      if (!regUsername) {
+                        setRegUsername(e.target.value.toLowerCase().replace(/\s+/g, ''));
+                      }
+                    }}
+                    placeholder="Ex: Judith Rezende"
+                    className="w-full bg-[#060D0B] border border-white/[0.1] rounded-lg px-3 py-2 text-xs sm:text-sm text-[#F0FDF8] focus:outline-none focus:border-[#00D2FF]"
                   />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-[#94A8A3] mb-1">
+                    Nome de Usuário (@handle)
+                  </label>
+                  <div className="flex items-center">
+                    <span className="px-2.5 py-2 rounded-l-lg bg-[#0D1F1C] border border-r-0 border-white/[0.1] text-xs text-[#94A8A3]">
+                      @
+                    </span>
+                    <input
+                      type="text"
+                      value={regUsername}
+                      onChange={(e) => setRegUsername(e.target.value)}
+                      placeholder="judithfilmes"
+                      className="w-full bg-[#060D0B] border border-white/[0.1] rounded-r-lg px-3 py-2 text-xs sm:text-sm text-[#F0FDF8] focus:outline-none focus:border-[#00D2FF]"
+                    />
+                  </div>
                 </div>
               </div>
 
@@ -332,7 +557,7 @@ export function LoginScreen({
                 <select
                   value={regGenre}
                   onChange={(e) => setRegGenre(e.target.value)}
-                  className="w-full bg-[#060D0B] border border-white/[0.1] rounded-lg px-3.5 py-2.5 text-sm text-[#F0FDF8] focus:outline-none focus:border-[#00D2FF]"
+                  className="w-full bg-[#060D0B] border border-white/[0.1] rounded-lg px-3 py-2 text-xs sm:text-sm text-[#F0FDF8] focus:outline-none focus:border-[#00D2FF]"
                 >
                   <option value="Ficção Científica">Ficção Científica</option>
                   <option value="Drama & Psicológico">Drama & Psicológico</option>
@@ -346,22 +571,62 @@ export function LoginScreen({
 
               <div>
                 <label className="block text-xs font-semibold text-[#94A8A3] mb-1">
-                  Biografia do seu Perfil
+                  Bio / Apresentação
                 </label>
                 <textarea
                   rows={2}
                   value={regBio}
                   onChange={(e) => setRegBio(e.target.value)}
-                  placeholder="Conte um pouco sobre sua relação com o cinema..."
-                  className="w-full bg-[#060D0B] border border-white/[0.1] rounded-lg px-3.5 py-2.5 text-xs text-[#F0FDF8] focus:outline-none focus:border-[#00D2FF] leading-relaxed"
+                  placeholder="Conte um pouco sobre suas preferências cinematográficas..."
+                  className="w-full bg-[#060D0B] border border-white/[0.1] rounded-lg px-3 py-1.5 text-xs text-[#F0FDF8] focus:outline-none focus:border-[#00D2FF]"
                 />
               </div>
 
-              {/* Avatar Picker */}
+              {/* Avatar Picker & File Upload */}
               <div>
                 <label className="block text-xs font-semibold text-[#94A8A3] mb-1.5">
-                  Escolha seu Avatar Cinematográfico
+                  Foto de Perfil / Avatar
                 </label>
+
+                <input
+                  type="file"
+                  ref={regFileInputRef}
+                  accept="image/*"
+                  onChange={handleRegFileUpload}
+                  className="hidden"
+                />
+
+                <div className="p-3 rounded-xl bg-[#060D0B] border border-white/[0.1] flex items-center gap-3.5 mb-2.5">
+                  <div className="relative w-14 h-14 rounded-xl overflow-hidden border-2 border-[#00D2FF] shadow-[0_0_12px_rgba(0,210,255,0.3)] bg-[#091412] flex-shrink-0 group">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={regCustomAvatar || regAvatar} alt="Avatar selecionado" className="w-full h-full object-cover" />
+                    <button
+                      type="button"
+                      onClick={() => regFileInputRef.current?.click()}
+                      className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-[#00D2FF]"
+                      title="Alterar foto"
+                    >
+                      <Camera className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  <div className="flex-1 min-w-0">
+                    <button
+                      type="button"
+                      onClick={() => regFileInputRef.current?.click()}
+                      disabled={isUploadingReg}
+                      className="py-1.5 px-3 rounded-lg bg-[#00D2FF] hover:bg-[#47d6ff] text-[#060D0B] font-extrabold text-xs shadow-md transition-all flex items-center gap-1.5 disabled:opacity-50"
+                    >
+                      <Upload className="w-3.5 h-3.5" />
+                      <span>{isUploadingReg ? 'Carregando foto...' : 'Fazer Upload da Minha Foto'}</span>
+                    </button>
+                    <p className="text-[10px] text-[#94A8A3] mt-1 truncate">
+                      Selecione uma imagem do seu dispositivo (celular/PC)
+                    </p>
+                  </div>
+                </div>
+
+                <span className="block text-[11px] text-[#94A8A3] mb-1 font-medium">Ou escolha um dos avatares clássicos:</span>
                 <div className="grid grid-cols-6 gap-2">
                   {AVATAR_PRESETS.map((preset, idx) => (
                     <button
@@ -387,69 +652,502 @@ export function LoginScreen({
                     </button>
                   ))}
                 </div>
-                <input
-                  type="url"
-                  value={regCustomAvatar}
-                  onChange={(e) => setRegCustomAvatar(e.target.value)}
-                  placeholder="Ou cole a URL de uma foto personalizada..."
-                  className="mt-2 w-full bg-[#060D0B] border border-white/[0.1] rounded-lg px-3 py-1.5 text-xs text-[#F0FDF8] focus:outline-none focus:border-[#00D2FF]"
-                />
               </div>
 
               <div className="pt-2">
                 <button
                   type="submit"
-                  className="w-full py-3.5 px-4 rounded-xl bg-[#00D2FF] hover:bg-[#47d6ff] text-[#060D0B] font-black text-sm shadow-[0_0_24px_rgba(0,210,255,0.4)] transition-all flex items-center justify-center gap-2"
+                  disabled={regLoading}
+                  className="w-full py-3.5 px-4 rounded-xl bg-[#00D2FF] hover:bg-[#47d6ff] text-[#060D0B] font-black text-sm shadow-[0_0_24px_rgba(0,210,255,0.4)] transition-all flex items-center justify-center gap-2 disabled:opacity-50"
                 >
                   <UserPlus className="w-4 h-4" />
-                  <span>Concluir Cadastro & Entrar</span>
+                  <span>{regLoading ? 'Cadastrando no Supabase...' : 'Concluir Cadastro com E-mail'}</span>
                 </button>
               </div>
             </form>
           )}
 
-          {/* Tab 3: Existing Presets (Sofia, Lucas, Beatriz) */}
-          {tab === 'existing' && (
-            <div className="p-6 sm:p-8 space-y-4 animate-in fade-in duration-200">
-              <p className="text-xs text-[#94A8A3]">
-                Deseja testar a rede acessando o perfil de um dos cinéfilos já estabelecidos na plataforma? Escolha abaixo:
-              </p>
-
-              <div className="space-y-2.5">
-                {allUsers.map((u) => (
-                  <button
-                    key={u.id}
-                    onClick={() => onSelectExistingUser(u)}
-                    className="w-full p-3.5 rounded-xl bg-[#0D1F1C] border border-white/[0.08] hover:border-[#00D2FF] hover:bg-[#122b26] transition-all flex items-center gap-3.5 text-left group"
-                  >
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={u.avatar}
-                      alt={u.name}
-                      className="w-12 h-12 rounded-xl object-cover border border-[#00D2FF]/40 group-hover:scale-105 transition-transform"
-                    />
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="font-bold text-sm text-[#F0FDF8] group-hover:text-[#00D2FF] transition-colors truncate">
-                          {u.name}
-                        </span>
-                        <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded bg-[#00D2FF]/10 text-[#00D2FF]">
-                          {u.badge}
-                        </span>
-                      </div>
-                      <p className="text-xs text-[#94A8A3]">@{u.username} • {u.favoriteGenre}</p>
-                      <p className="text-[11px] text-[#4D635F] italic truncate mt-0.5">&ldquo;{u.bio}&rdquo;</p>
-                    </div>
-                  </button>
-                ))}
+          {/* TAB 3: Instant Visitor Login */}
+          {tab === 'visitor' && (
+            <form onSubmit={handleVisitorSubmit} className="p-6 sm:p-8 space-y-4 animate-in fade-in duration-200">
+              <div className="p-4 rounded-xl bg-[#0D1F1C]/80 border border-[#00D2FF]/25 flex items-start gap-3.5">
+                <ShieldCheck className="w-6 h-6 text-[#00D2FF] flex-shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  <h3 className="text-sm font-bold text-[#F0FDF8]">Acesso Rápido para Visitantes</h3>
+                  <p className="text-xs text-[#94A8A3] leading-relaxed">
+                    Você pode entrar imediatamente sem necessidade de criar senhas! Como visitante, você pode favoritar seus filmes, editá-los e comentar nos murais de outros cinéfilos.
+                  </p>
+                </div>
               </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-[#94A8A3] mb-1.5">
+                  Nome do Visitante
+                </label>
+                <input
+                  type="text"
+                  value={visitorName}
+                  onChange={(e) => setVisitorName(e.target.value)}
+                  placeholder="Ex: Visitante Cinéfilo"
+                  className="w-full bg-[#060D0B] border border-white/[0.1] rounded-xl px-4 py-2.5 text-sm text-[#F0FDF8] focus:outline-none focus:border-[#00D2FF]"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-[#94A8A3] mb-1.5">
+                  Frase de Apresentação
+                </label>
+                <input
+                  type="text"
+                  value={visitorBio}
+                  onChange={(e) => setVisitorBio(e.target.value)}
+                  placeholder="Ex: Apaixonado por ficção científica e cinema dos anos 80..."
+                  className="w-full bg-[#060D0B] border border-white/[0.1] rounded-xl px-4 py-2.5 text-xs sm:text-sm text-[#F0FDF8] focus:outline-none focus:border-[#00D2FF]"
+                />
+              </div>
+
+              {/* Visitor Avatar File Upload */}
+              <div>
+                <label className="block text-xs font-semibold text-[#94A8A3] mb-1.5">
+                  Foto ou Avatar do Visitante
+                </label>
+
+                <input
+                  type="file"
+                  ref={visitorFileInputRef}
+                  accept="image/*"
+                  onChange={handleVisitorFileUpload}
+                  className="hidden"
+                />
+
+                <div className="p-3 rounded-xl bg-[#060D0B] border border-white/[0.1] flex items-center gap-3.5 mb-2.5">
+                  <div className="relative w-14 h-14 rounded-xl overflow-hidden border-2 border-[#00D2FF] shadow-[0_0_12px_rgba(0,210,255,0.3)] bg-[#091412] flex-shrink-0 group">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={visitorAvatar} alt="Avatar visitante" className="w-full h-full object-cover" />
+                    <button
+                      type="button"
+                      onClick={() => visitorFileInputRef.current?.click()}
+                      className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-[#00D2FF]"
+                      title="Alterar foto"
+                    >
+                      <Camera className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  <div className="flex-1 min-w-0">
+                    <button
+                      type="button"
+                      onClick={() => visitorFileInputRef.current?.click()}
+                      disabled={isUploadingVisitor}
+                      className="py-1.5 px-3 rounded-lg bg-[#00D2FF] hover:bg-[#47d6ff] text-[#060D0B] font-extrabold text-xs shadow-md transition-all flex items-center gap-1.5 disabled:opacity-50"
+                    >
+                      <Upload className="w-3.5 h-3.5" />
+                      <span>{isUploadingVisitor ? 'Carregando foto...' : 'Fazer Upload da Minha Foto'}</span>
+                    </button>
+                    <p className="text-[10px] text-[#94A8A3] mt-1 truncate">
+                      Personalize sua foto de visitante do seu celular ou PC
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-6 gap-2">
+                  {AVATAR_PRESETS.map((preset, idx) => (
+                    <button
+                      key={idx}
+                      type="button"
+                      onClick={() => setVisitorAvatar(preset.url)}
+                      className={`relative aspect-square rounded-lg overflow-hidden border-2 transition-all ${
+                        visitorAvatar === preset.url
+                          ? 'border-[#00D2FF] shadow-[0_0_12px_rgba(0,210,255,0.5)] scale-105'
+                          : 'border-transparent opacity-70 hover:opacity-100'
+                      }`}
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={preset.url} alt={preset.name} className="w-full h-full object-cover" />
+                      {visitorAvatar === preset.url && (
+                        <div className="absolute inset-0 bg-[#00D2FF]/20 flex items-center justify-center">
+                          <Check className="w-4 h-4 text-white drop-shadow" />
+                        </div>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="pt-2">
+                <button
+                  type="submit"
+                  className="w-full py-3.5 px-5 rounded-xl bg-[#00D2FF] hover:bg-[#47d6ff] text-[#060D0B] font-black text-sm shadow-[0_0_24px_rgba(0,210,255,0.4)] transition-all flex items-center justify-center gap-2"
+                >
+                  <Sparkles className="w-4 h-4" />
+                  <span>Entrar Agora como Visitante</span>
+                </button>
+              </div>
+            </form>
+          )}
+
+          {/* TAB 4: Existing / Saved Profiles */}
+          {tab === 'existing' && (
+            <div className="p-6 sm:p-8 space-y-3.5 animate-in fade-in duration-200">
+              <div className="flex items-center justify-between">
+                <p className="text-xs text-[#94A8A3]">
+                  Acesse com qualquer perfil salvo ou exclua contas da lista:
+                </p>
+                <span className="text-[11px] font-bold text-[#00D2FF] bg-[#00D2FF]/10 px-2 py-0.5 rounded-md border border-[#00D2FF]/20">
+                  {allUsers.length} {allUsers.length === 1 ? 'perfil' : 'perfis'}
+                </span>
+              </div>
+
+              {allUsers.length === 0 ? (
+                <div className="p-8 text-center rounded-xl bg-[#0D1F1C] border border-white/[0.08] space-y-2">
+                  <p className="text-sm font-semibold text-[#F0FDF8]">Nenhum perfil salvo no momento</p>
+                  <p className="text-xs text-[#94A8A3]">
+                    Cadastre uma nova conta na aba Cadastrar ou entre como Visitante.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-2.5 max-h-[50vh] overflow-y-auto pr-1">
+                  {allUsers.map((u) => (
+                    <div
+                      key={u.id}
+                      className="p-3 rounded-xl bg-[#0D1F1C] border border-white/[0.08] hover:border-[#00D2FF]/40 hover:bg-[#122b26] transition-all flex items-center gap-3 group"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => onSelectExistingUser(u)}
+                        className="flex-1 min-w-0 flex items-center gap-3.5 text-left"
+                      >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={u.avatar}
+                          alt={u.name}
+                          className="w-11 h-11 rounded-xl object-cover border border-[#00D2FF]/40 group-hover:scale-105 transition-transform flex-shrink-0"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-sm text-[#F0FDF8] group-hover:text-[#00D2FF] transition-colors truncate">
+                              {u.name}
+                            </span>
+                            <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded bg-[#00D2FF]/10 text-[#00D2FF] flex-shrink-0">
+                              {u.badge}
+                            </span>
+                          </div>
+                          <p className="text-xs text-[#94A8A3] truncate">@{u.username} • {u.favoriteGenre}</p>
+                        </div>
+                      </button>
+
+                      {onDeleteUser && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setUserToDelete(u);
+                          }}
+                          title={`Excluir perfil de ${u.name}`}
+                          className="p-2 rounded-lg text-[#94A8A3] hover:text-red-400 hover:bg-red-500/15 border border-transparent hover:border-red-500/30 transition-all flex-shrink-0"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>
+
+        {/* Collapsible Supabase Connection Information Box */}
+        <div className="w-full max-w-xl mt-4 rounded-xl bg-[#091412]/90 border border-white/[0.1] p-4 text-xs space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 font-bold text-[#F0FDF8]">
+              <Database className="w-4 h-4 text-[#00D2FF]" />
+              <span>Variáveis de Conexão com o Supabase</span>
+            </div>
+            <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded bg-[#00D2FF]/15 text-[#00D2FF]">
+              .env.example
+            </span>
+          </div>
+
+          <p className="text-[11px] text-[#94A8A3] leading-relaxed">
+            Para sincronizar e salvar as contas, filmes e recados diretamente no seu banco de dados Supabase na nuvem, adicione estas variáveis no arquivo de ambiente do projeto:
+          </p>
+
+          <div className="space-y-2 font-mono text-[11px]">
+            <div className="p-2.5 rounded-lg bg-[#060D0B] border border-white/[0.08] flex items-center justify-between gap-2">
+              <span className="text-[#00D2FF] truncate">NEXT_PUBLIC_SUPABASE_URL</span>
+              <button
+                type="button"
+                onClick={() => handleCopy('NEXT_PUBLIC_SUPABASE_URL', 'URL')}
+                className="text-[10px] px-2 py-1 rounded bg-white/[0.06] hover:bg-[#00D2FF]/20 text-[#94A8A3] hover:text-[#00D2FF] flex items-center gap-1 flex-shrink-0"
+              >
+                <Copy className="w-3 h-3" />
+                <span>{copiedVar === 'URL' ? 'Copiado!' : 'Copiar'}</span>
+              </button>
+            </div>
+
+            <div className="p-2.5 rounded-lg bg-[#060D0B] border border-white/[0.08] flex items-center justify-between gap-2">
+              <span className="text-[#00D2FF] truncate">NEXT_PUBLIC_SUPABASE_ANON_KEY</span>
+              <button
+                type="button"
+                onClick={() => handleCopy('NEXT_PUBLIC_SUPABASE_ANON_KEY', 'KEY')}
+                className="text-[10px] px-2 py-1 rounded bg-white/[0.06] hover:bg-[#00D2FF]/20 text-[#94A8A3] hover:text-[#00D2FF] flex items-center gap-1 flex-shrink-0"
+              >
+                <Copy className="w-3 h-3" />
+                <span>{copiedVar === 'KEY' ? 'Copiado!' : 'Copiar'}</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="pt-1 text-[11px] text-[#94A8A3] flex items-center gap-1.5">
+            <Sparkles className="w-3.5 h-3.5 text-[#00D2FF]" />
+            <span>O script SQL das tabelas está pronto em <strong>supabase-schema.sql</strong> para executar no seu Supabase.</span>
+          </div>
+        </div>
       </main>
 
+      {/* Supabase Settings & Troubleshooting Modal */}
+      {showSupabaseInfo && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
+          <div className="relative w-full max-w-2xl max-h-[90vh] bg-[#091412] border border-[#00D2FF]/40 rounded-2xl shadow-[0_0_60px_rgba(0,210,255,0.25)] flex flex-col overflow-hidden">
+            {/* Header */}
+            <div className="flex items-center justify-between p-5 border-b border-white/[0.08] bg-gradient-to-r from-[#0D1F1C] to-[#091412]">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-[#00D2FF]/15 border border-[#00D2FF]/40 flex items-center justify-center text-[#00D2FF]">
+                  <Database className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-base text-[#F0FDF8]">
+                    Configurações & Chaves do Supabase
+                  </h3>
+                  <p className="text-xs text-[#94A8A3]">
+                    Guia para resolver &ldquo;Invalid API key&rdquo; e gerenciar credenciais
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowSupabaseInfo(false)}
+                className="w-8 h-8 rounded-lg bg-white/[0.06] hover:bg-white/[0.12] text-[#94A8A3] hover:text-[#F0FDF8] flex items-center justify-center transition-all"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6 space-y-5 overflow-y-auto">
+              {/* Alert: Explaining Invalid API key */}
+              <div className="p-4 rounded-xl bg-[#FF2E4D]/10 border border-[#FF2E4D]/30 space-y-2.5">
+                <div className="flex items-center gap-2 text-sm font-bold text-[#FF2E4D]">
+                  <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                  <span>Por que o erro &ldquo;Invalid API key&rdquo; acontece?</span>
+                </div>
+                <p className="text-xs text-[#E1E7E5] leading-relaxed">
+                  O Supabase gera 3 tipos de credenciais diferentes. Se você colar a <strong>senha do banco</strong> ou a chave <strong>service_role</strong>, o Supabase rejeita a requisição com o erro <em>Invalid API key</em>.
+                </p>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1 text-[11px]">
+                  <div className="p-2.5 rounded-lg bg-[#060D0B] border border-emerald-500/40">
+                    <div className="flex items-center gap-1 font-bold text-emerald-400 mb-0.5">
+                      <Check className="w-3.5 h-3.5" />
+                      <span>anon public (Correta)</span>
+                    </div>
+                    <p className="text-[#94A8A3] text-[10px]">
+                      Token longo iniciando com <code>eyJhbGciOi...</code>. Esta é a chave pública para o frontend.
+                    </p>
+                  </div>
+
+                  <div className="p-2.5 rounded-lg bg-[#060D0B] border border-red-500/40">
+                    <div className="flex items-center gap-1 font-bold text-red-400 mb-0.5">
+                      <X className="w-3.5 h-3.5" />
+                      <span>Senha do Banco</span>
+                    </div>
+                    <p className="text-[#94A8A3] text-[10px]">
+                      Senha criada no setup do Postgres. <strong>Não</strong> funciona na API web do Supabase.
+                    </p>
+                  </div>
+
+                  <div className="p-2.5 rounded-lg bg-[#060D0B] border border-amber-500/40">
+                    <div className="flex items-center gap-1 font-bold text-amber-400 mb-0.5">
+                      <Key className="w-3.5 h-3.5" />
+                      <span>service_role</span>
+                    </div>
+                    <p className="text-[#94A8A3] text-[10px]">
+                      Chave administrativa secreta. Nunca deve ser usada no navegador.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Step by step guide */}
+              <div className="p-4 rounded-xl bg-[#0D1F1C] border border-white/[0.08] space-y-3">
+                <div className="flex items-center gap-2 text-xs font-bold text-[#00D2FF]">
+                  <HelpCircle className="w-4 h-4" />
+                  <span>Passo a passo no Painel do Supabase:</span>
+                </div>
+                <ol className="text-xs text-[#E1E7E5] space-y-2 list-decimal list-inside leading-relaxed">
+                  <li>
+                    Acesse <a href="https://supabase.com/dashboard" target="_blank" rel="noreferrer" className="text-[#00D2FF] underline inline-flex items-center gap-1">supabase.com/dashboard <ExternalLink className="w-3 h-3" /></a> e selecione seu projeto.
+                  </li>
+                  <li>
+                    No menu lateral esquerdo, clique no ícone de engrenagem <strong>Project Settings</strong> (ou Configurações do Projeto).
+                  </li>
+                  <li>
+                    Clique na aba <strong>API</strong> (ou <em>Data API</em>).
+                  </li>
+                  <li>
+                    Na seção <strong>Project API keys</strong>, copie a chave rotulada como <strong>&ldquo;anon&rdquo; / &ldquo;public&rdquo;</strong>.
+                  </li>
+                  <li>
+                    Copie também a <strong>Project URL</strong> (exemplo: <code>https://abcdefghijklmn.supabase.co</code>).
+                  </li>
+                </ol>
+              </div>
+
+              {/* Direct Paste Form */}
+              <form onSubmit={handleSaveCredentials} className="p-4 rounded-xl bg-[#060D0B] border border-white/[0.1] space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-[#F0FDF8] flex items-center gap-1.5">
+                    <Settings2 className="w-3.5 h-3.5 text-[#00D2FF]" />
+                    <span>Inserir ou Atualizar Credenciais no Navegador</span>
+                  </span>
+                  {credsSaved && (
+                    <span className="text-[11px] text-emerald-400 font-bold flex items-center gap-1">
+                      <Check className="w-3.5 h-3.5" /> Salvo com sucesso!
+                    </span>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-semibold text-[#94A8A3] mb-1">
+                    NEXT_PUBLIC_SUPABASE_URL
+                  </label>
+                  <input
+                    type="url"
+                    value={inputUrl}
+                    onChange={(e) => setInputUrl(e.target.value)}
+                    placeholder="https://seu-id-de-projeto.supabase.co"
+                    className="w-full bg-[#091412] border border-white/[0.12] rounded-lg px-3 py-2 text-xs font-mono text-[#F0FDF8] focus:outline-none focus:border-[#00D2FF]"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-semibold text-[#94A8A3] mb-1">
+                    NEXT_PUBLIC_SUPABASE_ANON_KEY (Token JWT público)
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={inputKey}
+                    onChange={(e) => setInputKey(e.target.value)}
+                    placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                    className="w-full bg-[#091412] border border-white/[0.12] rounded-lg px-3 py-2 text-xs font-mono text-[#F0FDF8] focus:outline-none focus:border-[#00D2FF] resize-none"
+                  />
+                </div>
+
+                <div className="flex items-center gap-2 pt-1">
+                  <button
+                    type="submit"
+                    className="py-2 px-4 rounded-lg bg-[#00D2FF] hover:bg-[#47d6ff] text-[#060D0B] font-extrabold text-xs shadow-md transition-all flex items-center gap-1.5"
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                    <span>Salvar Credenciais</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleResetCredentials}
+                    className="py-2 px-3 rounded-lg bg-white/[0.06] hover:bg-white/[0.12] text-[#94A8A3] hover:text-[#F0FDF8] text-xs font-semibold flex items-center gap-1 transition-all"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>Restaurar Padrão</span>
+                  </button>
+                </div>
+              </form>
+
+              {/* Instant local bypass option */}
+              <div className="p-4 rounded-xl bg-gradient-to-r from-[#00D2FF]/10 via-[#0D1F1C] to-transparent border border-[#00D2FF]/30 flex flex-col sm:flex-row items-center justify-between gap-3">
+                <div>
+                  <h4 className="text-xs font-bold text-[#F0FDF8]">Quer testar o site imediatamente sem o Supabase?</h4>
+                  <p className="text-[11px] text-[#94A8A3]">
+                    O modo local simula todas as funcionalidades: perfil, cadastro de filmes, edição, exclusão e comentários nos murais.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowSupabaseInfo(false);
+                    handleBypassToLocal();
+                  }}
+                  className="w-full sm:w-auto py-2 px-4 rounded-xl bg-[#00D2FF] text-[#060D0B] font-extrabold text-xs flex items-center justify-center gap-1.5 hover:bg-[#47d6ff] transition-all flex-shrink-0 shadow-[0_0_15px_rgba(0,210,255,0.3)]"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>Entrar em Modo Local</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Confirmação de Exclusão de Perfil */}
+      {userToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
+          <div className="w-full max-w-md p-6 rounded-2xl bg-[#091412] border border-red-500/40 shadow-[0_0_50px_rgba(239,68,68,0.3)] space-y-4">
+            <div className="flex items-center gap-3 text-red-400">
+              <div className="w-10 h-10 rounded-xl bg-red-500/15 border border-red-500/30 flex items-center justify-center flex-shrink-0">
+                <Trash2 className="w-5 h-5 text-red-400" />
+              </div>
+              <div>
+                <h3 className="font-extrabold text-base text-[#F0FDF8]">Excluir Perfil Salvo?</h3>
+                <p className="text-xs text-[#94A8A3]">Esta ação não pode ser desfeita</p>
+              </div>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-[#060D0B] border border-white/[0.08] flex items-center gap-3">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={userToDelete.avatar}
+                alt={userToDelete.name}
+                className="w-11 h-11 rounded-xl object-cover border border-white/20 flex-shrink-0"
+              />
+              <div className="min-w-0 flex-1">
+                <p className="font-bold text-sm text-[#F0FDF8] truncate">{userToDelete.name}</p>
+                <p className="text-xs text-[#94A8A3]">@{userToDelete.username} • {userToDelete.favoriteGenre}</p>
+              </div>
+            </div>
+
+            <p className="text-xs text-[#94A8A3] leading-relaxed">
+              Tem certeza que deseja excluir o perfil salvo de <strong className="text-white">{userToDelete.name}</strong>? Seus filmes cadastrados, avaliações e recados nos murais também serão removidos.
+            </p>
+
+            <div className="flex items-center justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => setUserToDelete(null)}
+                className="py-2 px-4 rounded-xl bg-white/[0.08] hover:bg-white/[0.15] text-xs font-semibold text-white transition-all"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (onDeleteUser) {
+                    onDeleteUser(userToDelete.id);
+                  }
+                  setUserToDelete(null);
+                }}
+                className="py-2 px-4 rounded-xl bg-red-600 hover:bg-red-500 text-white font-extrabold text-xs shadow-[0_0_16px_rgba(239,68,68,0.4)] flex items-center gap-1.5 transition-all"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Sim, Excluir Perfil</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Footer Info */}
-      <footer className="relative z-10 py-6 text-center text-xs text-[#4D635F]">
+      <footer className="relative z-10 py-4 text-center text-xs text-[#4D635F]">
         <p>Lumina CineClub • A rede social para quem ama a sétima arte</p>
       </footer>
     </div>

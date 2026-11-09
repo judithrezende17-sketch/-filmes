@@ -13,6 +13,7 @@ import { AddEditMovieModal } from '@/components/AddEditMovieModal';
 import { MovieModal } from '@/components/MovieModal';
 import { EditProfileModal } from '@/components/EditProfileModal';
 import { LoginScreen } from '@/components/LoginScreen';
+import { supabaseService } from '@/services/supabaseService';
 import { Film, Sparkles, CheckCircle2, Heart, MessageSquare, LogOut } from 'lucide-react';
 
 const STORAGE_KEY_USERS = 'lumina_cinema_users_v2';
@@ -188,19 +189,61 @@ export default function HomePage() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
+  // Initial Supabase remote sync if project is configured
+  useEffect(() => {
+    if (supabaseService.isConfigured()) {
+      supabaseService.loadAllData().then((res) => {
+        if (res.isSupabaseLive) {
+          // Merge users without wiping any locally added user
+          setUsers((currentUsers) => {
+            const userMap = new Map<string, User>();
+            INITIAL_USERS.forEach((u) => userMap.set(u.id, u));
+            currentUsers.forEach((u) => userMap.set(u.id, u));
+            res.users.forEach((u) => userMap.set(u.id, u));
+            const merged = Array.from(userMap.values());
+            saveUsers(merged);
+            return merged;
+          });
+
+          // Merge movies without wiping any locally added/favorited movie
+          setMovies((currentMovies) => {
+            const movieMap = new Map<string, Movie>();
+            INITIAL_MOVIES.forEach((m) => movieMap.set(m.id, m));
+            currentMovies.forEach((m) => movieMap.set(m.id, m));
+            res.movies.forEach((m) => movieMap.set(m.id, m));
+            const merged = Array.from(movieMap.values());
+            saveMovies(merged);
+            return merged;
+          });
+
+          // Merge comments
+          setComments((currentComments) => {
+            const commentMap = new Map<string, Comment>();
+            INITIAL_COMMENTS.forEach((c) => commentMap.set(c.id, c));
+            currentComments.forEach((c) => commentMap.set(c.id, c));
+            res.comments.forEach((c) => commentMap.set(c.id, c));
+            const merged = Array.from(commentMap.values());
+            saveComments(merged);
+            return merged;
+          });
+        }
+      });
+    }
+  }, []);
+
   const handleSaveMovie = (
     movieData: Omit<Movie, 'id' | 'createdAt' | 'likesCount' | 'likedBy'> & { id?: string }
   ) => {
     if (movieData.id) {
       // Editing
-      const updated = movies.map((m) =>
-        m.id === movieData.id
-          ? {
-              ...m,
-              ...movieData,
-            }
-          : m
-      );
+      const updated = movies.map((m) => {
+        if (m.id === movieData.id) {
+          const updatedMovie = { ...m, ...movieData };
+          supabaseService.saveMovie(updatedMovie, currentUser);
+          return updatedMovie;
+        }
+        return m;
+      });
       saveMovies(updated);
       showToast(`Filme "${movieData.title}" atualizado com sucesso!`);
     } else {
@@ -213,6 +256,7 @@ export default function HomePage() {
         likedBy: [currentUser.id],
         createdAt: new Date().toISOString().split('T')[0],
       };
+      supabaseService.saveMovie(newMovie, currentUser);
       const updated = [newMovie, ...movies];
       saveMovies(updated);
       showToast(`"${newMovie.title}" adicionado aos seus favoritos!`);
@@ -223,6 +267,7 @@ export default function HomePage() {
   const handleDeleteMovie = (movieId: string) => {
     const target = movies.find((m) => m.id === movieId);
     const updated = movies.filter((m) => m.id !== movieId);
+    supabaseService.deleteMovie(movieId);
     saveMovies(updated);
     showToast(`"${target?.title || 'Filme'}" foi removido dos favoritos.`);
   };
@@ -234,11 +279,13 @@ export default function HomePage() {
         const newLikedBy = alreadyLiked
           ? m.likedBy.filter((id) => id !== currentUser.id)
           : [...(m.likedBy || []), currentUser.id];
-        return {
+        const updatedMovie = {
           ...m,
           likedBy: newLikedBy,
           likesCount: newLikedBy.length,
         };
+        supabaseService.saveMovie(updatedMovie);
+        return updatedMovie;
       }
       return m;
     });
@@ -271,6 +318,7 @@ export default function HomePage() {
       likedBy: [],
     };
 
+    supabaseService.saveComment(newComm, currentUser);
     const updated = [newComm, ...comments];
     saveComments(updated);
     showToast('Seu recado foi publicado com sucesso!');
@@ -278,6 +326,7 @@ export default function HomePage() {
 
   const handleDeleteComment = (commentId: string) => {
     const updated = comments.filter((c) => c.id !== commentId);
+    supabaseService.deleteComment(commentId);
     saveComments(updated);
     showToast('Recado removido.');
   };
@@ -289,11 +338,13 @@ export default function HomePage() {
         const newLikedBy = alreadyLiked
           ? (c.likedBy || []).filter((id) => id !== currentUser.id)
           : [...(c.likedBy || []), currentUser.id];
-        return {
+        const updatedComment = {
           ...c,
           likedBy: newLikedBy,
           likes: newLikedBy.length,
         };
+        supabaseService.saveComment(updatedComment);
+        return updatedComment;
       }
       return c;
     });
@@ -301,11 +352,33 @@ export default function HomePage() {
   };
 
   const handleSaveProfile = (updatedData: Partial<User>) => {
-    const updatedUsers = users.map((u) =>
-      u.id === currentUser.id ? { ...u, ...updatedData } : u
-    );
+    const updatedUsers = users.map((u) => {
+      if (u.id === currentUser.id) {
+        const updatedUser = { ...u, ...updatedData };
+        supabaseService.updateProfile(updatedUser);
+        return updatedUser;
+      }
+      return u;
+    });
     saveUsers(updatedUsers);
     showToast('Perfil atualizado com sucesso!');
+  };
+
+  const handleLoginSuccess = (user: User, isSupabaseLive: boolean) => {
+    setUsers((prev) => {
+      const exists = prev.some((u) => u.id === user.id);
+      const updated = exists ? prev.map((u) => (u.id === user.id ? user : u)) : [user, ...prev];
+      saveUsers(updated);
+      return updated;
+    });
+    setCurrentUserId(user.id);
+    setViewedUserId(user.id);
+    setIsAuthenticated(true);
+    showToast(
+      isSupabaseLive
+        ? `Autenticado com sucesso via Supabase! Bem-vindo(a), ${user.name}.`
+        : `Conectado como ${user.name}!`
+    );
   };
 
   const handleLoginAsVisitor = (name: string, bio: string, avatar: string) => {
@@ -326,19 +399,46 @@ export default function HomePage() {
     showToast(`Bem-vindo(a), ${name || 'Visitante'}! Você entrou no Lumina CineClub.`);
   };
 
-  const handleRegisterFromLogin = (newUser: User) => {
-    handleRegisterUser(newUser);
-    setIsAuthenticated(true);
-  };
-
   const handleSelectUserFromLogin = (user: User) => {
     handleSelectUser(user);
     setIsAuthenticated(true);
   };
 
   const handleLogout = () => {
+    supabaseService.signOut();
     setIsAuthenticated(false);
     showToast('Você saiu da sua conta. Até logo!');
+  };
+
+  const handleDeleteUser = (userId: string) => {
+    const userToDelete = users.find((u) => u.id === userId);
+    const updatedUsers = users.filter((u) => u.id !== userId);
+    const updatedMovies = movies.filter((m) => m.userId !== userId);
+    const updatedComments = comments.filter((c) => c.targetUserId !== userId && c.authorId !== userId);
+
+    const safeUsers = updatedUsers.length > 0 ? updatedUsers : INITIAL_USERS;
+    saveUsers(safeUsers);
+    saveMovies(updatedMovies);
+    saveComments(updatedComments);
+    supabaseService.deleteProfile(userId);
+
+    if (currentUserId === userId) {
+      setIsAuthenticated(false);
+      const nextUser = safeUsers[0];
+      setCurrentUserId(nextUser.id);
+      setViewedUserId(nextUser.id);
+      try {
+        localStorage.setItem(STORAGE_KEY_CURRENT_USER, nextUser.id);
+      } catch (e) {
+        console.error(e);
+      }
+      showToast(`O perfil de "${userToDelete?.name || 'usuário'}" foi excluído com sucesso.`);
+    } else {
+      if (viewedUserId === userId) {
+        setViewedUserId(currentUserId);
+      }
+      showToast(`O perfil de "${userToDelete?.name || 'usuário'}" foi excluído.`);
+    }
   };
 
   // If not authenticated, the app starts directly with the Cinema Login Screen
@@ -347,9 +447,10 @@ export default function HomePage() {
       <>
         <LoginScreen
           allUsers={users}
+          onLoginSuccess={handleLoginSuccess}
           onLoginAsVisitor={handleLoginAsVisitor}
-          onRegister={handleRegisterFromLogin}
           onSelectExistingUser={handleSelectUserFromLogin}
+          onDeleteUser={handleDeleteUser}
         />
 
         {toastMessage && (
@@ -489,6 +590,7 @@ export default function HomePage() {
         allUsers={users}
         onSelectUser={handleSelectUser}
         onRegisterUser={handleRegisterUser}
+        onDeleteUser={handleDeleteUser}
       />
 
       <AddEditMovieModal
@@ -521,6 +623,7 @@ export default function HomePage() {
         onClose={() => setIsEditProfileModalOpen(false)}
         currentUser={currentUser}
         onSaveProfile={handleSaveProfile}
+        onDeleteProfile={() => handleDeleteUser(currentUser.id)}
       />
 
       {/* Transient Toast */}

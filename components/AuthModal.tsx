@@ -1,8 +1,9 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { User } from '@/types';
-import { X, UserPlus, LogIn, Sparkles, Film, Check, ShieldCheck } from 'lucide-react';
+import { processImageFile } from '@/lib/utils';
+import { X, UserPlus, LogIn, Sparkles, Film, Check, ShieldCheck, Trash2, Upload, Camera } from 'lucide-react';
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -11,6 +12,7 @@ interface AuthModalProps {
   allUsers: User[];
   onSelectUser: (user: User) => void;
   onRegisterUser: (newUser: User) => void;
+  onDeleteUser?: (userId: string) => void;
 }
 
 const AVATAR_PRESETS = [
@@ -47,8 +49,10 @@ export function AuthModal({
   allUsers,
   onSelectUser,
   onRegisterUser,
+  onDeleteUser,
 }: AuthModalProps) {
   const [tab, setTab] = useState<'visitor' | 'register' | 'switch'>('visitor');
+  const [userToDeleteSwitch, setUserToDeleteSwitch] = useState<User | null>(null);
 
   // Visitor form state
   const [visitorName, setVisitorName] = useState('Visitante Cinéfilo');
@@ -62,6 +66,23 @@ export function AuthModal({
   const [selectedAvatar, setSelectedAvatar] = useState(AVATAR_PRESETS[0].url);
   const [customAvatarUrl, setCustomAvatarUrl] = useState('');
   const [regError, setRegError] = useState('');
+  const [isUploading, setIsUploading] = useState(false);
+  const regFileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleRegFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      setIsUploading(true);
+      const dataUrl = await processImageFile(file, 400, 0.85);
+      setSelectedAvatar(dataUrl);
+      setCustomAvatarUrl('');
+    } catch (err: any) {
+      alert(err.message || 'Erro ao processar imagem.');
+    } finally {
+      setIsUploading(false);
+    }
+  };
 
   if (!isOpen) return null;
 
@@ -311,11 +332,51 @@ export function AuthModal({
               />
             </div>
 
-            {/* Avatar Picker */}
+            {/* Avatar Picker & File Upload */}
             <div>
               <label className="block text-xs font-semibold text-[#94A8A3] mb-1.5">
-                Escolha seu Avatar Cinematográfico
+                Foto de Perfil / Avatar
               </label>
+
+              <input
+                type="file"
+                ref={regFileInputRef}
+                accept="image/*"
+                onChange={handleRegFileUpload}
+                className="hidden"
+              />
+
+              <div className="p-3 rounded-xl bg-[#060D0B] border border-white/[0.1] flex items-center gap-3.5 mb-2.5">
+                <div className="relative w-14 h-14 rounded-xl overflow-hidden border-2 border-[#00D2FF] shadow-[0_0_12px_rgba(0,210,255,0.3)] bg-[#091412] flex-shrink-0 group">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={customAvatarUrl || selectedAvatar} alt="Avatar selecionado" className="w-full h-full object-cover" />
+                  <button
+                    type="button"
+                    onClick={() => regFileInputRef.current?.click()}
+                    className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-[#00D2FF]"
+                    title="Alterar foto"
+                  >
+                    <Camera className="w-4 h-4" />
+                  </button>
+                </div>
+
+                <div className="flex-1 min-w-0">
+                  <button
+                    type="button"
+                    onClick={() => regFileInputRef.current?.click()}
+                    disabled={isUploading}
+                    className="py-1.5 px-3 rounded-lg bg-[#00D2FF] hover:bg-[#47d6ff] text-[#060D0B] font-extrabold text-xs shadow-md transition-all flex items-center gap-1.5 disabled:opacity-50"
+                  >
+                    <Upload className="w-3.5 h-3.5" />
+                    <span>{isUploading ? 'Carregando foto...' : 'Fazer Upload da Minha Foto'}</span>
+                  </button>
+                  <p className="text-[10px] text-[#94A8A3] mt-1 truncate">
+                    Selecione uma foto da sua galeria ou câmera
+                  </p>
+                </div>
+              </div>
+
+              <span className="block text-[11px] text-[#94A8A3] mb-1 font-medium">Ou escolha um dos avatares clássicos:</span>
               <div className="grid grid-cols-6 gap-2">
                 {AVATAR_PRESETS.map((preset, idx) => (
                   <button
@@ -341,13 +402,6 @@ export function AuthModal({
                   </button>
                 ))}
               </div>
-              <input
-                type="url"
-                value={customAvatarUrl}
-                onChange={(e) => setCustomAvatarUrl(e.target.value)}
-                placeholder="Ou cole a URL de uma foto personalizada..."
-                className="mt-2 w-full bg-[#060D0B] border border-white/[0.1] rounded-lg px-3 py-1.5 text-xs text-[#F0FDF8] focus:outline-none focus:border-[#00D2FF]"
-              />
             </div>
 
             <button
@@ -363,45 +417,103 @@ export function AuthModal({
         {/* Tab 3: Switch Active User Profile */}
         {tab === 'switch' && (
           <div className="p-6 space-y-4">
-            <p className="text-xs text-[#94A8A3]">
-              Selecione qualquer perfil abaixo para assumir sua conta, ver como ela interage e testar enviar recados para outros cinéfilos:
-            </p>
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-[#94A8A3]">
+                Selecione um perfil para assumir ou exclua contas da lista:
+              </p>
+              <span className="text-[11px] font-bold text-[#00D2FF] bg-[#00D2FF]/10 px-2 py-0.5 rounded-md border border-[#00D2FF]/20">
+                {allUsers.length} {allUsers.length === 1 ? 'perfil' : 'perfis'}
+              </span>
+            </div>
 
-            <div className="space-y-2">
+            {userToDeleteSwitch && (
+              <div className="p-3.5 rounded-xl bg-red-950/30 border border-red-500/40 space-y-2 animate-in fade-in duration-200">
+                <div className="flex items-center gap-2 text-xs font-bold text-red-400">
+                  <Trash2 className="w-4 h-4 flex-shrink-0" />
+                  <span>Excluir perfil de {userToDeleteSwitch.name}?</span>
+                </div>
+                <p className="text-[11px] text-[#94A8A3]">
+                  Seus filmes favoritos cadastrados e comentários também serão apagados permanentemente.
+                </p>
+                <div className="flex items-center justify-end gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setUserToDeleteSwitch(null)}
+                    className="px-2.5 py-1 rounded-lg bg-white/[0.08] hover:bg-white/[0.15] text-xs text-white"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (onDeleteUser) {
+                        onDeleteUser(userToDeleteSwitch.id);
+                      }
+                      setUserToDeleteSwitch(null);
+                    }}
+                    className="px-3 py-1 rounded-lg bg-red-600 hover:bg-red-500 text-white text-xs font-bold shadow-md flex items-center gap-1"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Confirmar Exclusão</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <div className="space-y-2 max-h-[50vh] overflow-y-auto pr-1">
               {allUsers.map((u) => {
                 const isCurrent = currentUser.id === u.id;
                 return (
-                  <button
+                  <div
                     key={u.id}
-                    onClick={() => {
-                      onSelectUser(u);
-                      onClose();
-                    }}
-                    className={`w-full p-3 rounded-xl border flex items-center gap-3 transition-all text-left ${
+                    className={`w-full p-3 rounded-xl border flex items-center gap-3 transition-all ${
                       isCurrent
                         ? 'bg-[#00D2FF]/10 border-[#00D2FF] shadow-[0_0_16px_rgba(0,210,255,0.25)]'
                         : 'bg-[#0D1F1C] border-white/[0.08] hover:border-[#00D2FF]/40 hover:bg-[#122824]'
                     }`}
                   >
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={u.avatar}
-                      alt={u.name}
-                      className="w-12 h-12 rounded-full object-cover border border-white/20"
-                    />
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="font-bold text-sm text-[#F0FDF8] truncate">{u.name}</span>
-                        {isCurrent && (
-                          <span className="text-[10px] bg-[#00D2FF] text-[#060D0B] font-extrabold px-1.5 py-0.2 rounded">
-                            ATIVO
-                          </span>
-                        )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onSelectUser(u);
+                        onClose();
+                      }}
+                      className="flex-1 min-w-0 flex items-center gap-3 text-left"
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={u.avatar}
+                        alt={u.name}
+                        className="w-12 h-12 rounded-full object-cover border border-white/20 flex-shrink-0"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-sm text-[#F0FDF8] truncate">{u.name}</span>
+                          {isCurrent && (
+                            <span className="text-[10px] bg-[#00D2FF] text-[#060D0B] font-extrabold px-1.5 py-0.2 rounded flex-shrink-0">
+                              ATIVO
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-[#94A8A3] truncate">@{u.username} • {u.favoriteGenre}</p>
+                        <p className="text-[11px] text-[#4D635F] italic truncate mt-0.5">&ldquo;{u.bio}&rdquo;</p>
                       </div>
-                      <p className="text-xs text-[#94A8A3] truncate">@{u.username} • {u.favoriteGenre}</p>
-                      <p className="text-[11px] text-[#4D635F] italic truncate mt-0.5">&ldquo;{u.bio}&rdquo;</p>
-                    </div>
-                  </button>
+                    </button>
+
+                    {onDeleteUser && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setUserToDeleteSwitch(u);
+                        }}
+                        title={`Excluir perfil de ${u.name}`}
+                        className="p-2 rounded-lg text-[#94A8A3] hover:text-red-400 hover:bg-red-500/15 border border-transparent hover:border-red-500/30 transition-all flex-shrink-0"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
                 );
               })}
             </div>
