@@ -374,11 +374,46 @@ export default function HomePage() {
     setCurrentUserId(user.id);
     setViewedUserId(user.id);
     setIsAuthenticated(true);
+    try {
+      localStorage.setItem(STORAGE_KEY_CURRENT_USER, user.id);
+    } catch (e) {
+      console.error(e);
+    }
     showToast(
       isSupabaseLive
         ? `Autenticado com sucesso via Supabase! Bem-vindo(a), ${user.name}.`
         : `Conectado como ${user.name}!`
     );
+
+    // Immediately sync remote data from Supabase across devices
+    if (supabaseService.isConfigured()) {
+      supabaseService.loadAllData().then((res) => {
+        if (res.isSupabaseLive) {
+          if (res.movies.length > 0) {
+            setMovies((currentMovies) => {
+              const movieMap = new Map<string, Movie>();
+              INITIAL_MOVIES.forEach((m) => movieMap.set(m.id, m));
+              currentMovies.forEach((m) => movieMap.set(m.id, m));
+              res.movies.forEach((m) => movieMap.set(m.id, m));
+              const merged = Array.from(movieMap.values());
+              saveMovies(merged);
+              return merged;
+            });
+          }
+          if (res.comments.length > 0) {
+            setComments((currentComments) => {
+              const commentMap = new Map<string, Comment>();
+              INITIAL_COMMENTS.forEach((c) => commentMap.set(c.id, c));
+              currentComments.forEach((c) => commentMap.set(c.id, c));
+              res.comments.forEach((c) => commentMap.set(c.id, c));
+              const merged = Array.from(commentMap.values());
+              saveComments(merged);
+              return merged;
+            });
+          }
+        }
+      });
+    }
   };
 
   const handleLoginAsVisitor = (name: string, bio: string, avatar: string) => {
@@ -396,12 +431,32 @@ export default function HomePage() {
     setCurrentUserId('user_visitor');
     setViewedUserId('user_visitor');
     setIsAuthenticated(true);
+    try {
+      localStorage.setItem(STORAGE_KEY_CURRENT_USER, 'user_visitor');
+    } catch (e) {
+      console.error(e);
+    }
     showToast(`Bem-vindo(a), ${name || 'Visitante'}! Você entrou no Lumina CineClub.`);
   };
 
   const handleSelectUserFromLogin = (user: User) => {
     handleSelectUser(user);
     setIsAuthenticated(true);
+    if (supabaseService.isConfigured()) {
+      supabaseService.loadAllData().then((res) => {
+        if (res.isSupabaseLive && res.movies.length > 0) {
+          setMovies((currentMovies) => {
+            const movieMap = new Map<string, Movie>();
+            INITIAL_MOVIES.forEach((m) => movieMap.set(m.id, m));
+            currentMovies.forEach((m) => movieMap.set(m.id, m));
+            res.movies.forEach((m) => movieMap.set(m.id, m));
+            const merged = Array.from(movieMap.values());
+            saveMovies(merged);
+            return merged;
+          });
+        }
+      });
+    }
   };
 
   const handleLogout = () => {
@@ -483,7 +538,7 @@ export default function HomePage() {
       />
 
       {/* Main Viewport Container */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8 pb-24 lg:pb-8">
         {activeTab === 'my-profile' && (
           <ProfileView
             viewedUser={viewedUser}

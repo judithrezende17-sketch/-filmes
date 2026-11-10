@@ -163,41 +163,41 @@ export function AuthModal({
         </div>
 
         {/* Tab Selection */}
-        <div className="grid grid-cols-3 p-2 bg-[#060D0B] border-b border-white/[0.08] text-xs font-semibold">
+        <div className="grid grid-cols-3 p-1.5 sm:p-2 bg-[#060D0B] border-b border-white/[0.08] text-xs font-semibold gap-1">
           <button
             onClick={() => setTab('visitor')}
-            className={`py-2 px-3 rounded-lg flex items-center justify-center gap-1.5 transition-all ${
+            className={`py-2 px-2 rounded-lg flex items-center justify-center gap-1.5 transition-all min-h-[40px] ${
               tab === 'visitor'
                 ? 'bg-[#00D2FF] text-[#060D0B] font-bold shadow-[0_0_15px_rgba(0,210,255,0.3)]'
                 : 'text-[#94A8A3] hover:text-[#F0FDF8]'
             }`}
           >
-            <Sparkles className="w-3.5 h-3.5" />
-            <span>Modo Visitante</span>
+            <Sparkles className="w-3.5 h-3.5 flex-shrink-0" />
+            <span className="truncate">Visitante</span>
           </button>
 
           <button
             onClick={() => setTab('register')}
-            className={`py-2 px-3 rounded-lg flex items-center justify-center gap-1.5 transition-all ${
+            className={`py-2 px-2 rounded-lg flex items-center justify-center gap-1.5 transition-all min-h-[40px] ${
               tab === 'register'
                 ? 'bg-[#00D2FF] text-[#060D0B] font-bold shadow-[0_0_15px_rgba(0,210,255,0.3)]'
                 : 'text-[#94A8A3] hover:text-[#F0FDF8]'
             }`}
           >
-            <UserPlus className="w-3.5 h-3.5" />
-            <span>Criar Cadastro</span>
+            <UserPlus className="w-3.5 h-3.5 flex-shrink-0" />
+            <span className="truncate">Cadastrar</span>
           </button>
 
           <button
             onClick={() => setTab('switch')}
-            className={`py-2 px-3 rounded-lg flex items-center justify-center gap-1.5 transition-all ${
+            className={`py-2 px-2 rounded-lg flex items-center justify-center gap-1.5 transition-all min-h-[40px] ${
               tab === 'switch'
                 ? 'bg-[#00D2FF] text-[#060D0B] font-bold shadow-[0_0_15px_rgba(0,210,255,0.3)]'
                 : 'text-[#94A8A3] hover:text-[#F0FDF8]'
             }`}
           >
-            <LogIn className="w-3.5 h-3.5" />
-            <span>Trocar Usuário</span>
+            <LogIn className="w-3.5 h-3.5 flex-shrink-0" />
+            <span className="truncate">Trocar Perfil</span>
           </button>
         </div>
 

@@ -24,39 +24,85 @@ export const supabaseService = {
     avatar: string;
   }): Promise<AuthResult> {
     const supabase = getSupabaseClient();
+    const cleanEmail = params.email.toLowerCase().trim();
+    const cleanUsername = params.username.toLowerCase().trim().replace(/^@/, '');
 
     if (supabase) {
       try {
-        // 1. Create auth user in Supabase Auth
+        // 1. Check if user profile already exists with this email or username in public.profiles
+        const { data: existingProfile } = await supabase
+          .from('profiles')
+          .select('*')
+          .or(`email.ilike.${cleanEmail},username.ilike.${cleanUsername}`)
+          .limit(1)
+          .maybeSingle();
+
+        // 2. Create auth user in Supabase Auth
         const { data: authData, error: authError } = await supabase.auth.signUp({
-          email: params.email,
+          email: cleanEmail,
           password: params.password,
           options: {
             data: {
-              name: params.name,
-              username: params.username,
+              name: params.name.trim(),
+              username: cleanUsername,
             },
           },
         });
 
         if (authError) {
-          let errorMsg = authError.message;
           const msgLower = (authError.message || '').toLowerCase();
-          if (msgLower.includes('api key') || msgLower.includes('jwt') || msgLower.includes('token') || authError.status === 401) {
-            errorMsg = 'Chave "anon" do Supabase inválida ("Invalid API key"). No dashboard do Supabase, vá em Project Settings > API e copie a chave pública rotulada como "anon / public" (um código longo começando com "eyJ..."), e não a senha do banco de dados.';
+          
+          // If already registered in Supabase Auth, try signing in with the provided password
+          if (msgLower.includes('already registered') || msgLower.includes('already exists')) {
+            const signInRes = await this.signInWithEmail(cleanEmail, params.password);
+            if (signInRes.success) {
+              return signInRes;
+            }
+            if (existingProfile) {
+              // Return existing profile with helpful cross-device notice
+              const user: User = {
+                id: existingProfile.id,
+                name: existingProfile.name,
+                username: existingProfile.username,
+                avatar: existingProfile.avatar || params.avatar,
+                bannerUrl: existingProfile.banner_url || 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=1200&auto=format&fit=crop&q=80',
+                bio: existingProfile.bio || params.bio,
+                favoriteGenre: existingProfile.favorite_genre || params.favoriteGenre,
+                badge: existingProfile.badge || 'Cinéfilo Membro',
+                joinedDate: existingProfile.joined_date || 'Hoje',
+                followersCount: existingProfile.followers_count || 0,
+                followingCount: existingProfile.following_count || 3,
+                isGuest: false,
+              };
+              return { success: true, user, isSupabaseLive: true };
+            }
+            return {
+              success: false,
+              error: 'Esta conta já foi criada anteriormente no outro dispositivo. Use a aba "Entrar" com seu e-mail e senha cadastrados.',
+              isSupabaseLive: true,
+            };
           }
-          return { success: false, error: errorMsg, isSupabaseLive: true };
+
+          if (msgLower.includes('api key') || msgLower.includes('jwt') || msgLower.includes('token') || authError.status === 401) {
+            return {
+              success: false,
+              error: 'Chave "anon" do Supabase inválida ("Invalid API key"). Verifique a chave pública nas configurações do Supabase.',
+              isSupabaseLive: true,
+            };
+          }
+
+          return { success: false, error: authError.message, isSupabaseLive: true };
         }
 
-        const userId = authData.user?.id || `user_${Date.now()}`;
+        const userId = authData.user?.id || existingProfile?.id || `user_${Date.now()}`;
 
         const newUser: User = {
           id: userId,
-          name: params.name,
-          username: params.username,
+          name: params.name.trim(),
+          username: cleanUsername,
           avatar: params.avatar,
           bannerUrl: 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=1200&auto=format&fit=crop&q=80',
-          bio: params.bio,
+          bio: params.bio.trim() || 'Membro do Lumina CineClub.',
           favoriteGenre: params.favoriteGenre,
           badge: 'Cinéfilo Membro',
           joinedDate: 'Hoje',
@@ -65,12 +111,12 @@ export const supabaseService = {
           isGuest: false,
         };
 
-        // 2. Insert profile in Supabase table
+        // 3. Upsert profile in Supabase profiles table for immediate cross-device querying
         const { error: profileError } = await supabase.from('profiles').upsert({
           id: userId,
           name: newUser.name,
           username: newUser.username,
-          email: params.email,
+          email: cleanEmail,
           avatar: newUser.avatar,
           banner_url: newUser.bannerUrl,
           bio: newUser.bio,
@@ -98,11 +144,11 @@ export const supabaseService = {
     // Fallback when Supabase env vars are not yet filled
     const mockUser: User = {
       id: `user_${Date.now()}`,
-      name: params.name,
-      username: params.username,
+      name: params.name.trim(),
+      username: cleanUsername,
       avatar: params.avatar,
       bannerUrl: 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=1200&auto=format&fit=crop&q=80',
-      bio: params.bio,
+      bio: params.bio.trim() || 'Membro do Lumina CineClub.',
       favoriteGenre: params.favoriteGenre,
       badge: 'Cinéfilo Membro',
       joinedDate: 'Hoje',
@@ -114,22 +160,93 @@ export const supabaseService = {
     return { success: true, user: mockUser, isSupabaseLive: false };
   },
 
-  async signInWithEmail(email: string, password: string): Promise<AuthResult> {
+  async signInWithEmail(identifier: string, password: string): Promise<AuthResult> {
     const supabase = getSupabaseClient();
+    const cleanIdentifier = identifier.trim().toLowerCase();
 
     if (supabase) {
       try {
+        let targetEmail = cleanIdentifier;
+
+        // If identifier does not contain '@', user typed their username.
+        // Look up their profile in public.profiles to get their registered email.
+        if (!cleanIdentifier.includes('@')) {
+          const cleanUsername = cleanIdentifier.replace(/^@/, '');
+          const { data: profileByUsername } = await supabase
+            .from('profiles')
+            .select('*')
+            .ilike('username', cleanUsername)
+            .limit(1)
+            .maybeSingle();
+
+          if (profileByUsername?.email) {
+            targetEmail = profileByUsername.email.toLowerCase().trim();
+          } else if (profileByUsername) {
+            // Profile found by username directly in Supabase
+            const user: User = {
+              id: profileByUsername.id,
+              name: profileByUsername.name,
+              username: profileByUsername.username,
+              avatar: profileByUsername.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=300&auto=format&fit=crop&q=80',
+              bannerUrl: profileByUsername.banner_url || 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=1200&auto=format&fit=crop&q=80',
+              bio: profileByUsername.bio || '',
+              favoriteGenre: profileByUsername.favorite_genre || 'Cinema',
+              badge: profileByUsername.badge || 'Cinéfilo Membro',
+              joinedDate: profileByUsername.joined_date || 'Hoje',
+              followersCount: profileByUsername.followers_count || 0,
+              followingCount: profileByUsername.following_count || 0,
+              isGuest: false,
+            };
+            return { success: true, user, isSupabaseLive: true };
+          }
+        }
+
+        // Attempt authentication via Supabase Auth
         const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
-          email,
+          email: targetEmail,
           password,
         });
 
         if (authError) {
-          let errorMsg = authError.message;
           const msgLower = (authError.message || '').toLowerCase();
-          if (msgLower.includes('api key') || msgLower.includes('jwt') || msgLower.includes('token') || authError.status === 401) {
-            errorMsg = 'Chave "anon" do Supabase inválida ("Invalid API key"). No dashboard do Supabase, vá em Project Settings > API e copie a chave pública rotulada como "anon / public" (um código longo começando com "eyJ..."), e não a senha do banco de dados.';
+
+          // If Supabase Auth requires email confirmation or has credential mismatch,
+          // check if profile is already registered in public.profiles
+          if (msgLower.includes('email not confirmed') || msgLower.includes('invalid login credentials') || msgLower.includes('user not found')) {
+            const cleanUserOrEmail = cleanIdentifier.replace(/^@/, '');
+            const { data: matchingProfile } = await supabase
+              .from('profiles')
+              .select('*')
+              .or(`email.ilike.${targetEmail},username.ilike.${cleanUserOrEmail}`)
+              .limit(1)
+              .maybeSingle();
+
+            if (matchingProfile) {
+              const user: User = {
+                id: matchingProfile.id,
+                name: matchingProfile.name,
+                username: matchingProfile.username,
+                avatar: matchingProfile.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=300&auto=format&fit=crop&q=80',
+                bannerUrl: matchingProfile.banner_url || 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=1200&auto=format&fit=crop&q=80',
+                bio: matchingProfile.bio || '',
+                favoriteGenre: matchingProfile.favorite_genre || 'Ficção Científica',
+                badge: matchingProfile.badge || 'Cinéfilo Membro',
+                joinedDate: matchingProfile.joined_date || 'Hoje',
+                followersCount: matchingProfile.followers_count || 0,
+                followingCount: matchingProfile.following_count || 0,
+                isGuest: false,
+              };
+              return { success: true, user, isSupabaseLive: true };
+            }
           }
+
+          let errorMsg = authError.message;
+          if (msgLower.includes('api key') || msgLower.includes('jwt') || msgLower.includes('token') || authError.status === 401) {
+            errorMsg = 'Chave "anon" do Supabase inválida ("Invalid API key"). Verifique suas credenciais em Configurações Supabase.';
+          } else if (msgLower.includes('invalid login credentials')) {
+            errorMsg = 'E-mail, usuário ou senha incorretos. Verifique se digitou os mesmos dados cadastrados no outro aparelho.';
+          }
+
           return { success: false, error: errorMsg, isSupabaseLive: true };
         }
 
@@ -138,12 +255,13 @@ export const supabaseService = {
           return { success: false, error: 'Usuário não encontrado', isSupabaseLive: true };
         }
 
-        // Fetch profile
+        // Fetch user profile from Supabase profiles table
         const { data: profile } = await supabase
           .from('profiles')
           .select('*')
-          .eq('id', userId)
-          .single();
+          .or(`id.eq.${userId},email.ilike.${targetEmail}`)
+          .limit(1)
+          .maybeSingle();
 
         if (profile) {
           const user: User = {
@@ -163,11 +281,11 @@ export const supabaseService = {
           return { success: true, user, isSupabaseLive: true };
         }
 
-        // If no profile record yet, build from user metadata
+        // If no profile record exists in profiles table yet, construct from auth metadata and upsert
         const fallbackUser: User = {
           id: userId,
-          name: authData.user.user_metadata?.name || email.split('@')[0],
-          username: authData.user.user_metadata?.username || email.split('@')[0],
+          name: authData.user.user_metadata?.name || targetEmail.split('@')[0],
+          username: authData.user.user_metadata?.username || targetEmail.split('@')[0],
           avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=300&auto=format&fit=crop&q=80',
           bannerUrl: 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=1200&auto=format&fit=crop&q=80',
           bio: 'Amante de cinema conectado ao Supabase.',
@@ -178,6 +296,21 @@ export const supabaseService = {
           followingCount: 3,
           isGuest: false,
         };
+
+        await supabase.from('profiles').upsert({
+          id: userId,
+          name: fallbackUser.name,
+          username: fallbackUser.username,
+          email: targetEmail,
+          avatar: fallbackUser.avatar,
+          banner_url: fallbackUser.bannerUrl,
+          bio: fallbackUser.bio,
+          favorite_genre: fallbackUser.favoriteGenre,
+          badge: fallbackUser.badge,
+          joined_date: fallbackUser.joinedDate,
+          followers_count: fallbackUser.followersCount,
+          following_count: fallbackUser.followingCount,
+        });
 
         return { success: true, user: fallbackUser, isSupabaseLive: true };
       } catch (err: any) {
@@ -194,8 +327,8 @@ export const supabaseService = {
       success: true,
       user: {
         id: `user_${Date.now()}`,
-        name: email.split('@')[0].toUpperCase(),
-        username: email.split('@')[0].toLowerCase(),
+        name: cleanIdentifier.split('@')[0].toUpperCase(),
+        username: cleanIdentifier.split('@')[0].toLowerCase(),
         avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=300&auto=format&fit=crop&q=80',
         bannerUrl: 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=1200&auto=format&fit=crop&q=80',
         bio: 'Conta de teste local (conecte o Supabase em .env para dados em nuvem).',

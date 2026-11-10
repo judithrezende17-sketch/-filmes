@@ -130,7 +130,7 @@ export function ProfileView({
       {/* Profile Cinema Header */}
       <div className="relative rounded-2xl bg-[#091412] border border-white/[0.08] overflow-hidden shadow-2xl">
         {/* Banner Backdrop */}
-        <div className="relative h-48 sm:h-64 w-full overflow-hidden bg-[#060D0B]">
+        <div className="relative h-36 sm:h-52 md:h-64 w-full overflow-hidden bg-[#060D0B]">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={viewedUser.bannerUrl}
@@ -142,11 +142,11 @@ export function ProfileView({
         </div>
 
         {/* Profile Card Info Box */}
-        <div className="relative px-6 pb-6 pt-0 sm:px-8">
-          <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 -mt-16 sm:-mt-20">
+        <div className="relative px-4 pb-6 pt-0 sm:px-8">
+          <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 -mt-10 sm:-mt-16 md:-mt-20">
             {/* Avatar & Identifiers */}
-            <div className="flex flex-col sm:flex-row items-center sm:items-end gap-4 text-center sm:text-left">
-              <div className="relative w-28 h-28 sm:w-32 sm:h-32 rounded-2xl overflow-hidden border-2 border-[#00D2FF] shadow-[0_0_28px_rgba(0,210,255,0.4)] flex-shrink-0 bg-[#060D0B] group">
+            <div className="flex flex-col sm:flex-row items-center sm:items-end gap-3 sm:gap-4 text-center sm:text-left">
+              <div className="relative w-20 h-20 sm:w-28 sm:h-28 md:w-32 md:h-32 rounded-2xl overflow-hidden border-2 border-[#00D2FF] shadow-[0_0_28px_rgba(0,210,255,0.4)] flex-shrink-0 bg-[#060D0B] group">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src={viewedUser.avatar}
@@ -159,24 +159,24 @@ export function ProfileView({
                     className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center text-[#00D2FF] gap-1 cursor-pointer"
                     title="Alterar foto de perfil"
                   >
-                    <Camera className="w-6 h-6" />
-                    <span className="text-[10px] font-bold text-white tracking-wider uppercase">Alterar Foto</span>
+                    <Camera className="w-5 h-5 sm:w-6 sm:h-6" />
+                    <span className="text-[9px] sm:text-[10px] font-bold text-white tracking-wider uppercase">Alterar</span>
                   </button>
                 )}
               </div>
 
               <div className="space-y-1">
                 <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2">
-                  <h1 className="text-2xl sm:text-3xl font-extrabold text-[#F0FDF8] tracking-tight">
+                  <h1 className="text-xl sm:text-2xl md:text-3xl font-extrabold text-[#F0FDF8] tracking-tight">
                     {viewedUser.name}
                   </h1>
-                  <span className="text-[11px] uppercase font-bold tracking-wider px-2.5 py-0.5 rounded-full bg-[#00D2FF]/15 text-[#00D2FF] border border-[#00D2FF]/30 flex items-center gap-1 shadow-sm">
+                  <span className="text-[10px] sm:text-[11px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-[#00D2FF]/15 text-[#00D2FF] border border-[#00D2FF]/30 flex items-center gap-1 shadow-sm">
                     <Shield className="w-3 h-3" />
                     {viewedUser.badge}
                   </span>
                 </div>
 
-                <p className="text-sm text-[#94A8A3] font-medium">
+                <p className="text-xs sm:text-sm text-[#94A8A3] font-medium">
                   @{viewedUser.username} • Membro desde {viewedUser.joinedDate}
                 </p>
 
@@ -188,12 +188,12 @@ export function ProfileView({
             </div>
 
             {/* Action Buttons */}
-            <div className="flex items-center justify-center gap-2.5 pt-2 sm:pt-0">
+            <div className="flex flex-wrap sm:flex-nowrap items-center justify-center sm:justify-end gap-2 sm:gap-2.5 pt-2 sm:pt-0 w-full sm:w-auto">
               {isOwnProfile ? (
                 <>
                   <button
                     onClick={onOpenAddMovieModal}
-                    className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#00D2FF] hover:bg-[#47d6ff] text-[#060D0B] font-extrabold text-xs sm:text-sm shadow-[0_0_24px_rgba(0,210,255,0.4)] hover:shadow-[0_0_32px_rgba(0,210,255,0.6)] transform hover:scale-[1.02] active:scale-95 transition-all"
+                    className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-3.5 sm:px-4 py-2.5 rounded-xl bg-[#00D2FF] hover:bg-[#47d6ff] text-[#060D0B] font-extrabold text-xs sm:text-sm shadow-[0_0_24px_rgba(0,210,255,0.4)] hover:shadow-[0_0_32px_rgba(0,210,255,0.6)] transform hover:scale-[1.02] active:scale-95 transition-all"
                   >
                     <Plus className="w-4 h-4 stroke-[3]" />
                     <span>Cadastrar Filme</span>
@@ -201,16 +201,16 @@ export function ProfileView({
 
                   <button
                     onClick={onOpenEditProfileModal}
-                    className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl bg-[#0D1F1C] hover:bg-[#152e2a] text-[#F0FDF8] font-semibold text-xs sm:text-sm border border-white/[0.12] hover:border-[#00D2FF]/50 transition-all"
+                    className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-3 sm:px-3.5 py-2.5 rounded-xl bg-[#0D1F1C] hover:bg-[#152e2a] text-[#F0FDF8] font-semibold text-xs sm:text-sm border border-white/[0.12] hover:border-[#00D2FF]/50 transition-all"
                   >
                     <Edit3 className="w-4 h-4 text-[#94A8A3]" />
-                    <span className="hidden sm:inline">Editar Perfil</span>
+                    <span>Editar Perfil</span>
                   </button>
                 </>
               ) : (
                 <a
                   href="#mural-recados"
-                  className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#00D2FF] hover:bg-[#47d6ff] text-[#060D0B] font-extrabold text-xs sm:text-sm shadow-[0_0_24px_rgba(0,210,255,0.4)] transition-all transform hover:scale-[1.02] active:scale-95"
+                  className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-[#00D2FF] hover:bg-[#47d6ff] text-[#060D0B] font-extrabold text-xs sm:text-sm shadow-[0_0_24px_rgba(0,210,255,0.4)] transition-all transform hover:scale-[1.02] active:scale-95"
                 >
                   <MessageSquare className="w-4 h-4" />
                   <span>Deixar Recado no Mural</span>
@@ -291,13 +291,13 @@ export function ProfileView({
           </div>
 
           {/* Search inside profile */}
-          <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex items-center gap-2 w-full sm:w-auto">
             <input
               type="text"
               value={searchFilter}
               onChange={(e) => setSearchFilter(e.target.value)}
               placeholder="Filtrar nesta lista..."
-              className="bg-[#091412] text-xs text-[#F0FDF8] placeholder-[#4D635F] px-3 py-1.5 rounded-lg border border-white/[0.08] focus:outline-none focus:border-[#00D2FF] w-40 sm:w-48"
+              className="bg-[#091412] text-xs text-[#F0FDF8] placeholder-[#4D635F] px-3 py-1.5 rounded-lg border border-white/[0.08] focus:outline-none focus:border-[#00D2FF] flex-1 sm:w-48"
             />
 
             <select
@@ -369,7 +369,7 @@ export function ProfileView({
             )}
           </div>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-5">
+          <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-5">
             {displayedMovies.map((movie) => {
               const movieComments = comments.filter((c) => c.movieId === movie.id);
               return (

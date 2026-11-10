@@ -75,11 +75,11 @@ export function MovieModal({
         </div>
 
         {/* Modal Body */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-6">
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5 sm:space-y-6">
           {/* Main Info Row */}
-          <div className="flex flex-col sm:flex-row gap-6">
+          <div className="flex flex-col sm:flex-row gap-5 sm:gap-6">
             {/* Poster */}
-            <div className="relative w-44 sm:w-56 aspect-[2/3] rounded-xl overflow-hidden flex-shrink-0 border border-white/[0.12] shadow-[0_8px_30px_rgba(0,0,0,0.7)] mx-auto sm:mx-0">
+            <div className="relative w-36 sm:w-56 aspect-[2/3] rounded-xl overflow-hidden flex-shrink-0 border border-white/[0.12] shadow-[0_8px_30px_rgba(0,0,0,0.7)] mx-auto sm:mx-0">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={movie.posterUrl}

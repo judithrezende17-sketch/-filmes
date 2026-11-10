@@ -53,53 +53,56 @@ export function MovieCard({
         {/* Gradient Scrim */}
         <div className="absolute inset-0 bg-gradient-to-t from-[#060D0B] via-transparent to-black/40 opacity-80 group-hover:opacity-90 transition-opacity" />
 
-        {/* Top Badges: Rating & Resolution */}
-        <div className="absolute top-3 left-3 right-3 flex items-center justify-between gap-2 z-10">
-          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#060D0B]/85 backdrop-blur-md border border-[#00D2FF]/40 text-[#00D2FF] text-xs font-black shadow-lg">
-            <Star className="w-3.5 h-3.5 fill-[#00D2FF] text-[#00D2FF]" />
+        {/* Top Badges: Rating & Action Buttons */}
+        <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between gap-1.5 z-10">
+          <div className="flex items-center gap-1 px-2 py-0.5 sm:px-2.5 sm:py-1 rounded-full bg-[#060D0B]/90 backdrop-blur-md border border-[#00D2FF]/40 text-[#00D2FF] text-[11px] sm:text-xs font-black shadow-lg">
+            <Star className="w-3 h-3 sm:w-3.5 sm:h-3.5 fill-[#00D2FF] text-[#00D2FF]" />
             <span>{typeof movie.rating === 'number' ? movie.rating.toFixed(1) : movie.rating}</span>
           </div>
 
-          <div className="flex items-center gap-1">
-            {movie.badges?.[0] && (
-              <span className="text-[10px] font-bold tracking-wider uppercase px-2 py-0.5 rounded bg-white/10 backdrop-blur-md text-[#94A8A3] border border-white/15">
+          {/* Action buttons visible directly on mobile and hover on desktop */}
+          {isOwner && (onEdit || onDelete) ? (
+            <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+              {onEdit && (
+                <button
+                  type="button"
+                  onClick={() => onEdit(movie)}
+                  title="Editar este filme"
+                  className="p-1.5 sm:p-2 rounded-lg bg-[#060D0B]/85 hover:bg-[#00D2FF] text-[#94A8A3] hover:text-[#060D0B] border border-white/20 transition-all shadow-md"
+                >
+                  <Edit2 className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
+                </button>
+              )}
+              {onDelete && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (confirm(`Deseja remover "${movie.title}" dos seus filmes favoritos?`)) {
+                      onDelete(movie.id);
+                    }
+                  }}
+                  title="Remover filme"
+                  className="p-1.5 sm:p-2 rounded-lg bg-[#060D0B]/85 hover:bg-[#FF2E4D] text-[#94A8A3] hover:text-white border border-white/20 transition-all shadow-md"
+                >
+                  <Trash2 className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
+                </button>
+              )}
+            </div>
+          ) : (
+            movie.badges?.[0] && (
+              <span className="text-[9px] sm:text-[10px] font-bold tracking-wider uppercase px-2 py-0.5 rounded bg-white/10 backdrop-blur-md text-[#94A8A3] border border-white/15 truncate max-w-[80px]">
                 {movie.badges[0]}
               </span>
-            )}
-          </div>
+            )
+          )}
         </div>
 
-        {/* Hover Quick Action Overlay */}
-        <div className="absolute inset-x-0 bottom-0 p-4 transform translate-y-2 opacity-0 group-hover:translate-y-0 group-hover:opacity-100 transition-all duration-300 z-10 flex items-center justify-between">
-          <span className="text-xs font-bold text-[#00D2FF] flex items-center gap-1 bg-[#060D0B]/80 px-2.5 py-1 rounded-md backdrop-blur-sm border border-[#00D2FF]/30">
+        {/* Hover Quick Action Overlay (Desktop) */}
+        <div className="hidden sm:flex absolute inset-x-0 bottom-0 p-3 transform translate-y-2 opacity-0 group-hover:translate-y-0 group-hover:opacity-100 transition-all duration-300 z-10 items-center justify-between">
+          <span className="text-xs font-bold text-[#00D2FF] flex items-center gap-1 bg-[#060D0B]/85 px-2.5 py-1 rounded-md backdrop-blur-sm border border-[#00D2FF]/30">
             <Film className="w-3.5 h-3.5" />
-            Ver Ficha Completa
+            Ver Ficha
           </span>
-
-          <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
-            {isOwner && onEdit && (
-              <button
-                onClick={() => onEdit(movie)}
-                title="Editar este filme"
-                className="p-2 rounded-lg bg-[#0D1F1C]/90 text-white hover:text-[#00D2FF] hover:bg-[#00D2FF]/20 border border-white/20 transition-all"
-              >
-                <Edit2 className="w-3.5 h-3.5" />
-              </button>
-            )}
-            {isOwner && onDelete && (
-              <button
-                onClick={() => {
-                  if (confirm(`Deseja remover "${movie.title}" dos seus filmes favoritos?`)) {
-                    onDelete(movie.id);
-                  }
-                }}
-                title="Remover filme"
-                className="p-2 rounded-lg bg-[#0D1F1C]/90 text-white hover:text-[#FF2E4D] hover:bg-[#FF2E4D]/20 border border-white/20 transition-all"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
-            )}
-          </div>
         </div>
       </div>
 

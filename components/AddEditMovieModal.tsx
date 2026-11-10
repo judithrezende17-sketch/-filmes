@@ -178,7 +178,7 @@ export function AddEditMovieModal({
         )}
 
         {/* Modal Body */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-5">
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 sm:space-y-5">
           {error && (
             <div className="p-3 rounded-lg bg-[#FF2E4D]/15 border border-[#FF2E4D]/30 text-xs text-[#FF2E4D] font-medium">
               {error}
