@@ -149,5 +149,6 @@ CREATE INDEX IF NOT EXISTS idx_movies_user_id ON public.movies(user_id);
 CREATE INDEX IF NOT EXISTS idx_comments_target_user_id ON public.comments(target_user_id);
 CREATE INDEX IF NOT EXISTS idx_comments_author_id ON public.comments(author_id);
 
--- Confirmação
-SELECT 'Schema do Lumina CineClub configurado com sucesso no Supabase!' AS status;
+-- ==============================================================================
+-- FIM DO SCRIPT - Se executado sem erros, o Supabase exibirá 'Success. No rows returned'
+-- ==============================================================================
