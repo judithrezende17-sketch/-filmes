@@ -19,61 +19,43 @@ export const cleanAsciiString = (val?: string | null): string => {
     .trim();
 };
 
-export const getSupabaseCredentials = () => {
-  let localUrl = '';
-  let localKey = '';
+// Permanent verified Supabase project credentials provided by user
+export const SUPABASE_URL = cleanAsciiString(
+  process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://ledxptmjvmabbqofrhex.supabase.co'
+);
 
-  if (typeof window !== 'undefined') {
-    try {
-      const rawUrl = localStorage.getItem('supabase_override_url');
-      const rawKey = localStorage.getItem('supabase_override_anon_key');
-      localUrl = cleanAsciiString(rawUrl);
-      localKey = cleanAsciiString(rawKey);
+export const SUPABASE_ANON_KEY = cleanAsciiString(
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'sb_publishable_AHkSthhKC4anc4Jx-vIEMg_3utHZjxV'
+);
 
-      // If localStorage had dirty characters, fix them
-      if (rawUrl && rawUrl !== localUrl) localStorage.setItem('supabase_override_url', localUrl);
-      if (rawKey && rawKey !== localKey) localStorage.setItem('supabase_override_anon_key', localKey);
-    } catch {
-      // Ignore localStorage access restrictions
-    }
+// Clear any stale or corrupted localStorage keys from older sessions
+if (typeof window !== 'undefined') {
+  try {
+    localStorage.removeItem('supabase_override_url');
+    localStorage.removeItem('supabase_override_anon_key');
+  } catch {
+    // Ignore restricted environments
   }
+}
 
-  const envUrl = cleanAsciiString(process.env.NEXT_PUBLIC_SUPABASE_URL);
-  const envKey = cleanAsciiString(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
-
+export const getSupabaseCredentials = () => {
   return {
-    url: localUrl || envUrl || 'https://ledxptmjvmabbqofrhex.supabase.co',
-    key: localKey || envKey || 'sb_publishable_AHkSthhKC4anc4Jx-vIEMg_3utHZjxV',
+    url: SUPABASE_URL,
+    key: SUPABASE_ANON_KEY,
   };
 };
 
 export const isSupabaseConfigured = (): boolean => {
-  const { url, key } = getSupabaseCredentials();
-  return Boolean(
-    url &&
-    key &&
-    !url.includes('your-project-id') &&
-    !key.includes('your-anon-public-api-key') &&
-    url.startsWith('https://') &&
-    key.length > 20
-  );
+  return Boolean(SUPABASE_URL && SUPABASE_ANON_KEY && SUPABASE_ANON_KEY.length > 20);
 };
 
 // Singleton client instance
 let supabaseInstance: SupabaseClient | null = null;
-let lastUrl: string | null = null;
-let lastKey: string | null = null;
 
-export const getSupabaseClient = (): SupabaseClient | null => {
-  if (!isSupabaseConfigured()) {
-    return null;
-  }
-
-  const { url, key } = getSupabaseCredentials();
-
-  if (!supabaseInstance || lastUrl !== url || lastKey !== key) {
+export const getSupabaseClient = (): SupabaseClient => {
+  if (!supabaseInstance) {
     try {
-      supabaseInstance = createClient(url, key, {
+      supabaseInstance = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
         auth: {
           persistSession: true,
           autoRefreshToken: true,
@@ -106,29 +88,17 @@ export const getSupabaseClient = (): SupabaseClient | null => {
           },
         },
       });
-      lastUrl = url;
-      lastKey = key;
     } catch (e) {
       console.warn('Failed to initialize Supabase client:', e);
-      return null;
+      // Fallback instance without custom fetch if fetch wrapper fails
+      supabaseInstance = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
     }
   }
 
   return supabaseInstance;
 };
 
-export const setSupabaseCustomCredentials = (url: string, key: string) => {
-  if (typeof window !== 'undefined') {
-    const cleanUrl = cleanAsciiString(url);
-    const cleanKey = cleanAsciiString(key);
-
-    if (cleanUrl && cleanKey) {
-      localStorage.setItem('supabase_override_url', cleanUrl);
-      localStorage.setItem('supabase_override_anon_key', cleanKey);
-    } else {
-      localStorage.removeItem('supabase_override_url');
-      localStorage.removeItem('supabase_override_anon_key');
-    }
-    supabaseInstance = null; // force re-create
-  }
+export const setSupabaseCustomCredentials = (_url: string, _key: string) => {
+  // Always maintain official credentials
+  supabaseInstance = null;
 };

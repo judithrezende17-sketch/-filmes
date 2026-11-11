@@ -5,10 +5,11 @@ import { User } from '@/types';
 import { supabaseService } from '@/services/supabaseService';
 import { getSupabaseCredentials, setSupabaseCustomCredentials, cleanAsciiString } from '@/lib/supabase';
 import { processImageFile } from '@/lib/utils';
+import { SUPABASE_SQL_SCHEMA } from '@/lib/sqlSchema';
 import { 
   Film, Sparkles, UserPlus, LogIn, ShieldCheck, Check, Star, 
   MessageSquare, Clapperboard, Mail, Lock, Database, Copy, AlertCircle, Eye, EyeOff, Settings2, RefreshCw,
-  X, Key, ExternalLink, HelpCircle, Trash2, Upload, Camera, Image as ImageIcon
+  X, Key, ExternalLink, HelpCircle, Trash2, Upload, Camera, Image as ImageIcon, Code2
 } from 'lucide-react';
 
 interface LoginScreenProps {
@@ -17,6 +18,8 @@ interface LoginScreenProps {
   onLoginAsVisitor: (name: string, bio: string, avatar: string) => void;
   onSelectExistingUser: (user: User) => void;
   onDeleteUser?: (userId: string) => void;
+  onRefreshData?: () => void;
+  isLoadingData?: boolean;
 }
 
 const AVATAR_PRESETS = [
@@ -52,6 +55,8 @@ export function LoginScreen({
   onLoginAsVisitor,
   onSelectExistingUser,
   onDeleteUser,
+  onRefreshData,
+  isLoadingData,
 }: LoginScreenProps) {
   const [tab, setTab] = useState<'email-login' | 'email-register' | 'visitor' | 'existing'>('email-login');
   const [userToDelete, setUserToDelete] = useState<User | null>(null);
@@ -211,17 +216,6 @@ export function LoginScreen({
     }
   };
 
-  const handleBypassToLocal = () => {
-    const localUser = supabaseService.createLocalUser({
-      name: regName.trim() || loginEmail.split('@')[0] || 'Cinéfilo',
-      username: regUsername.trim() || loginEmail.split('@')[0] || 'cinéfilo',
-      favoriteGenre: regGenre,
-      bio: regBio.trim() || 'Modo local ativado.',
-      avatar: regAvatar,
-    });
-    onLoginSuccess(localUser, false);
-  };
-
   const handleVisitorSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     onLoginAsVisitor(
@@ -360,11 +354,11 @@ export function LoginScreen({
                   <div className="pt-1 flex flex-col sm:flex-row gap-2">
                     <button
                       type="button"
-                      onClick={handleBypassToLocal}
+                      onClick={() => setTab('email-register')}
                       className="py-1.5 px-3 rounded-lg bg-[#00D2FF] text-[#060D0B] font-extrabold text-xs flex items-center justify-center gap-1.5 hover:bg-[#47d6ff] transition-all shadow-md"
                     >
-                      <Sparkles className="w-3.5 h-3.5" />
-                      <span>Entrar em Modo Local</span>
+                      <UserPlus className="w-3.5 h-3.5" />
+                      <span>Criar Nova Conta no Supabase</span>
                     </button>
                     <button
                       type="button"
@@ -465,11 +459,11 @@ export function LoginScreen({
                   <div className="pt-1 flex flex-col sm:flex-row gap-2">
                     <button
                       type="button"
-                      onClick={handleBypassToLocal}
+                      onClick={() => setTab('email-login')}
                       className="py-1.5 px-3 rounded-lg bg-[#00D2FF] text-[#060D0B] font-extrabold text-xs flex items-center justify-center gap-1.5 hover:bg-[#47d6ff] transition-all shadow-md"
                     >
-                      <Sparkles className="w-3.5 h-3.5" />
-                      <span>Continuar com este cadastro em Modo Local</span>
+                      <LogIn className="w-3.5 h-3.5" />
+                      <span>Já tem conta? Ir para Entrar</span>
                     </button>
                     <button
                       type="button"
@@ -477,7 +471,7 @@ export function LoginScreen({
                       className="py-1.5 px-3 rounded-lg bg-white/[0.08] text-white hover:text-[#00D2FF] text-xs font-semibold flex items-center justify-center gap-1 transition-all"
                     >
                       <Database className="w-3.5 h-3.5" />
-                      <span>Ver instrução da chave anon</span>
+                      <span>Ver credenciais Supabase</span>
                     </button>
                   </div>
                 </div>
@@ -805,16 +799,41 @@ export function LoginScreen({
           {/* TAB 4: Existing / Saved Profiles */}
           {tab === 'existing' && (
             <div className="p-6 sm:p-8 space-y-3.5 animate-in fade-in duration-200">
-              <div className="flex items-center justify-between">
-                <p className="text-xs text-[#94A8A3]">
-                  Acesse com qualquer perfil salvo ou exclua contas da lista:
-                </p>
-                <span className="text-[11px] font-bold text-[#00D2FF] bg-[#00D2FF]/10 px-2 py-0.5 rounded-md border border-[#00D2FF]/20">
-                  {allUsers.length} {allUsers.length === 1 ? 'perfil' : 'perfis'}
-                </span>
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <p className="text-xs text-[#94A8A3]">
+                    Perfis registrados na nuvem Supabase:
+                  </p>
+                  <p className="text-[10px] text-[#4D635F]">Sincronizados entre mobile e desktop</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  {onRefreshData && (
+                    <button
+                      type="button"
+                      onClick={onRefreshData}
+                      disabled={isLoadingData}
+                      title="Atualizar lista da nuvem"
+                      className="p-1.5 rounded-lg bg-[#0D1F1C] border border-white/[0.1] text-[#94A8A3] hover:text-[#00D2FF] hover:border-[#00D2FF]/40 transition-all flex items-center gap-1 text-[11px]"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${isLoadingData ? 'animate-spin text-[#00D2FF]' : ''}`} />
+                      <span className="hidden sm:inline">Sincronizar</span>
+                    </button>
+                  )}
+                  <span className="text-[11px] font-bold text-[#00D2FF] bg-[#00D2FF]/10 px-2 py-0.5 rounded-md border border-[#00D2FF]/20 flex-shrink-0">
+                    {allUsers.length} {allUsers.length === 1 ? 'perfil' : 'perfis'}
+                  </span>
+                </div>
               </div>
 
-              {allUsers.length === 0 ? (
+              {isLoadingData ? (
+                <div className="p-8 text-center rounded-xl bg-[#0D1F1C] border border-white/[0.08] space-y-2">
+                  <RefreshCw className="w-6 h-6 text-[#00D2FF] animate-spin mx-auto" />
+                  <p className="text-sm font-semibold text-[#F0FDF8]">Buscando perfis no Supabase...</p>
+                  <p className="text-xs text-[#94A8A3]">
+                    Carregando contas cadastradas na nuvem.
+                  </p>
+                </div>
+              ) : allUsers.length === 0 ? (
                 <div className="p-8 text-center rounded-xl bg-[#0D1F1C] border border-white/[0.08] space-y-2">
                   <p className="text-sm font-semibold text-[#F0FDF8]">Nenhum perfil salvo no momento</p>
                   <p className="text-xs text-[#94A8A3]">
@@ -915,9 +934,19 @@ export function LoginScreen({
             </div>
           </div>
 
-          <div className="pt-1 text-[11px] text-[#94A8A3] flex items-center gap-1.5">
-            <Sparkles className="w-3.5 h-3.5 text-[#00D2FF]" />
-            <span>O script SQL das tabelas está pronto em <strong>supabase-schema.sql</strong> para executar no seu Supabase.</span>
+          <div className="pt-2 flex flex-col sm:flex-row items-center justify-between gap-2.5 border-t border-white/[0.08]">
+            <div className="flex items-center gap-1.5 text-[11px] text-[#94A8A3]">
+              <Code2 className="w-4 h-4 text-[#00D2FF] flex-shrink-0" />
+              <span>Novo código SQL pronto para colar no SQL Editor do Supabase</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => handleCopy(SUPABASE_SQL_SCHEMA, 'SQL')}
+              className="w-full sm:w-auto py-2 px-3.5 rounded-lg bg-[#00D2FF] hover:bg-[#47d6ff] text-[#060D0B] font-extrabold text-xs flex items-center justify-center gap-1.5 shadow-[0_0_15px_rgba(0,210,255,0.3)] transition-all flex-shrink-0"
+            >
+              <Copy className="w-3.5 h-3.5" />
+              <span>{copiedVar === 'SQL' ? 'Código SQL Copiado!' : 'Copiar Novo Código SQL'}</span>
+            </button>
           </div>
         </div>
       </main>
@@ -1020,6 +1049,32 @@ export function LoginScreen({
                 </ol>
               </div>
 
+              {/* SQL Schema Box */}
+              <div className="p-4 rounded-xl bg-[#0D1F1C] border border-[#00D2FF]/30 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-xs font-bold text-[#00D2FF]">
+                    <Code2 className="w-4 h-4" />
+                    <span>Novo Código SQL para o Supabase</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleCopy(SUPABASE_SQL_SCHEMA, 'SQL_MODAL')}
+                    className="py-1 px-3 rounded-lg bg-[#00D2FF] hover:bg-[#47d6ff] text-[#060D0B] font-extrabold text-xs flex items-center gap-1.5 shadow transition-all"
+                  >
+                    <Copy className="w-3 h-3" />
+                    <span>{copiedVar === 'SQL_MODAL' ? 'Copiado!' : 'Copiar Código SQL'}</span>
+                  </button>
+                </div>
+                <p className="text-[11px] text-[#94A8A3] leading-relaxed">
+                  Abra o <a href="https://supabase.com/dashboard/project/ledxptmjvmabbqofrhex/sql" target="_blank" rel="noreferrer" className="text-[#00D2FF] underline inline-flex items-center gap-1">SQL Editor no painel do Supabase <ExternalLink className="w-3 h-3" /></a>, cole o script abaixo e clique no botão verde <strong>Run</strong>.
+                </p>
+                <div className="relative">
+                  <pre className="p-3 rounded-lg bg-[#060D0B] border border-white/[0.08] text-[10px] font-mono text-[#E1E7E5] max-h-36 overflow-y-auto whitespace-pre leading-relaxed">
+                    {SUPABASE_SQL_SCHEMA}
+                  </pre>
+                </div>
+              </div>
+
               {/* Direct Paste Form */}
               <form onSubmit={handleSaveCredentials} className="p-4 rounded-xl bg-[#060D0B] border border-white/[0.1] space-y-3">
                 <div className="flex items-center justify-between">
@@ -1080,25 +1135,29 @@ export function LoginScreen({
                 </div>
               </form>
 
-              {/* Instant local bypass option */}
+              {/* Cloud-first reassurance banner */}
               <div className="p-4 rounded-xl bg-gradient-to-r from-[#00D2FF]/10 via-[#0D1F1C] to-transparent border border-[#00D2FF]/30 flex flex-col sm:flex-row items-center justify-between gap-3">
-                <div>
-                  <h4 className="text-xs font-bold text-[#F0FDF8]">Quer testar o site imediatamente sem o Supabase?</h4>
-                  <p className="text-[11px] text-[#94A8A3]">
-                    O modo local simula todas as funcionalidades: perfil, cadastro de filmes, edição, exclusão e comentários nos murais.
-                  </p>
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-lg bg-[#00D2FF]/20 flex items-center justify-center flex-shrink-0 text-[#00D2FF]">
+                    <Database className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold text-[#F0FDF8]">Armazenamento 100% em Nuvem Supabase</h4>
+                    <p className="text-[11px] text-[#94A8A3]">
+                      Perfis cadastrados, filmes e murais são salvos diretamente no banco Supabase e sincronizados em tempo real entre celular e computador.
+                    </p>
+                  </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowSupabaseInfo(false);
-                    handleBypassToLocal();
-                  }}
-                  className="w-full sm:w-auto py-2 px-4 rounded-xl bg-[#00D2FF] text-[#060D0B] font-extrabold text-xs flex items-center justify-center gap-1.5 hover:bg-[#47d6ff] transition-all flex-shrink-0 shadow-[0_0_15px_rgba(0,210,255,0.3)]"
-                >
-                  <Sparkles className="w-3.5 h-3.5" />
-                  <span>Entrar em Modo Local</span>
-                </button>
+                {onRefreshData && (
+                  <button
+                    type="button"
+                    onClick={onRefreshData}
+                    className="w-full sm:w-auto py-2 px-3 rounded-xl bg-[#0D1F1C] border border-[#00D2FF]/40 text-[#00D2FF] font-bold text-xs flex items-center justify-center gap-1.5 hover:bg-[#00D2FF]/10 transition-all flex-shrink-0 shadow-sm"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>Recarregar Nuvem</span>
+                  </button>
+                )}
               </div>
             </div>
           </div>

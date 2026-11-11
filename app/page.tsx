@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { User, Movie, Comment } from '@/types';
 import { INITIAL_USERS, INITIAL_MOVIES, INITIAL_COMMENTS } from '@/lib/initialData';
 import { Navbar } from '@/components/Navbar';
@@ -14,83 +14,19 @@ import { MovieModal } from '@/components/MovieModal';
 import { EditProfileModal } from '@/components/EditProfileModal';
 import { LoginScreen } from '@/components/LoginScreen';
 import { supabaseService } from '@/services/supabaseService';
-import { Film, Sparkles, CheckCircle2, Heart, MessageSquare, LogOut } from 'lucide-react';
-
-const STORAGE_KEY_USERS = 'lumina_cinema_users_v2';
-const STORAGE_KEY_MOVIES = 'lumina_cinema_movies_v2';
-const STORAGE_KEY_COMMENTS = 'lumina_cinema_comments_v2';
-const STORAGE_KEY_CURRENT_USER = 'lumina_cinema_current_user_id_v2';
+import { Film, CheckCircle2, LogOut, RefreshCw } from 'lucide-react';
 
 export default function HomePage() {
-  // Application Data States initialized with lazy storage check
-  const [users, setUsers] = useState<User[]>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const stored = localStorage.getItem(STORAGE_KEY_USERS);
-        if (stored) {
-          const parsed: User[] = JSON.parse(stored);
-          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-        }
-      } catch (e) {
-        console.warn(e);
-      }
-    }
-    return INITIAL_USERS;
-  });
+  // Application Data States - 100% cloud-authoritative in Supabase (Zero localStorage)
+  const [users, setUsers] = useState<User[]>(INITIAL_USERS);
+  const [movies, setMovies] = useState<Movie[]>(INITIAL_MOVIES);
+  const [comments, setComments] = useState<Comment[]>(INITIAL_COMMENTS);
 
-  const [movies, setMovies] = useState<Movie[]>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const stored = localStorage.getItem(STORAGE_KEY_MOVIES);
-        if (stored) {
-          const parsed: Movie[] = JSON.parse(stored);
-          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-        }
-      } catch (e) {
-        console.warn(e);
-      }
-    }
-    return INITIAL_MOVIES;
-  });
+  const [currentUserId, setCurrentUserId] = useState<string>(INITIAL_USERS[0].id);
+  const [viewedUserId, setViewedUserId] = useState<string>(INITIAL_USERS[0].id);
 
-  const [comments, setComments] = useState<Comment[]>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const stored = localStorage.getItem(STORAGE_KEY_COMMENTS);
-        if (stored) {
-          const parsed: Comment[] = JSON.parse(stored);
-          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-        }
-      } catch (e) {
-        console.warn(e);
-      }
-    }
-    return INITIAL_COMMENTS;
-  });
-
-  const [currentUserId, setCurrentUserId] = useState<string>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const stored = localStorage.getItem(STORAGE_KEY_CURRENT_USER);
-        if (stored) return stored;
-      } catch (e) {
-        console.warn(e);
-      }
-    }
-    return INITIAL_USERS[0].id;
-  });
-
-  const [viewedUserId, setViewedUserId] = useState<string>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const stored = localStorage.getItem(STORAGE_KEY_CURRENT_USER);
-        if (stored) return stored;
-      } catch (e) {
-        console.warn(e);
-      }
-    }
-    return INITIAL_USERS[0].id;
-  });
+  // Cloud sync loading indicator
+  const [isLoadingData, setIsLoadingData] = useState<boolean>(true);
 
   // User Authentication State - Starts false so app starts on the Login Screen
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
@@ -118,33 +54,59 @@ export default function HomePage() {
     }, 3500);
   };
 
-  // Sync to LocalStorage
-  const saveUsers = (updatedUsers: User[]) => {
-    setUsers(updatedUsers);
+  /**
+   * Load authoritative data directly from Supabase tables (profiles, movies, comments).
+   * Cross-device guarantee: mobile and desktop always see the exact same cloud database.
+   */
+  const loadCloudData = useCallback(async () => {
+    setIsLoadingData(true);
     try {
-      localStorage.setItem(STORAGE_KEY_USERS, JSON.stringify(updatedUsers));
+      const res = await supabaseService.loadAllData();
+      if (res.isSupabaseLive) {
+        if (res.users.length > 0) {
+          setUsers(res.users);
+        }
+        if (res.movies.length > 0) {
+          setMovies(res.movies);
+        }
+        if (res.comments.length > 0) {
+          setComments(res.comments);
+        }
+      }
     } catch (e) {
-      console.error(e);
+      console.warn('Failed to load cloud data from Supabase:', e);
+    } finally {
+      setIsLoadingData(false);
     }
-  };
+  }, []);
 
-  const saveMovies = (updatedMovies: Movie[]) => {
-    setMovies(updatedMovies);
-    try {
-      localStorage.setItem(STORAGE_KEY_MOVIES, JSON.stringify(updatedMovies));
-    } catch (e) {
-      console.error(e);
-    }
-  };
+  // Fetch Supabase cloud data on initial mount without synchronous setState in effect body
+  useEffect(() => {
+    let isMounted = true;
 
-  const saveComments = (updatedComments: Comment[]) => {
-    setComments(updatedComments);
-    try {
-      localStorage.setItem(STORAGE_KEY_COMMENTS, JSON.stringify(updatedComments));
-    } catch (e) {
-      console.error(e);
-    }
-  };
+    supabaseService
+      .loadAllData()
+      .then((res) => {
+        if (!isMounted) return;
+        if (res.isSupabaseLive) {
+          if (res.users.length > 0) setUsers(res.users);
+          if (res.movies.length > 0) setMovies(res.movies);
+          if (res.comments.length > 0) setComments(res.comments);
+        }
+      })
+      .catch((e) => {
+        console.warn('Error fetching Supabase cloud data on mount:', e);
+      })
+      .finally(() => {
+        if (isMounted) {
+          setIsLoadingData(false);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   // Current active user object
   const currentUser = users.find((u) => u.id === currentUserId) || users[0] || INITIAL_USERS[0];
@@ -161,26 +123,16 @@ export default function HomePage() {
   const handleSelectUser = (user: User) => {
     setCurrentUserId(user.id);
     setViewedUserId(user.id);
-    try {
-      localStorage.setItem(STORAGE_KEY_CURRENT_USER, user.id);
-    } catch (e) {
-      console.error(e);
-    }
     showToast(`Conectado como ${user.name}`);
   };
 
-  const handleRegisterUser = (newUser: User) => {
-    const updated = [newUser, ...users];
-    saveUsers(updated);
+  const handleRegisterUser = async (newUser: User) => {
+    setUsers((prev) => [newUser, ...prev.filter((u) => u.id !== newUser.id)]);
     setCurrentUserId(newUser.id);
     setViewedUserId(newUser.id);
-    try {
-      localStorage.setItem(STORAGE_KEY_CURRENT_USER, newUser.id);
-    } catch (e) {
-      console.error(e);
-    }
     setActiveTab('my-profile');
-    showToast(`Bem-vindo ao Lumina, ${newUser.name}! Seu cadastro foi concluído.`);
+    showToast(`Bem-vindo ao Lumina, ${newUser.name}! Seu cadastro foi concluído no Supabase.`);
+    await supabaseService.updateProfile(newUser);
   };
 
   const handleSelectUserToView = (user: User) => {
@@ -189,65 +141,21 @@ export default function HomePage() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  // Initial Supabase remote sync if project is configured
-  useEffect(() => {
-    if (supabaseService.isConfigured()) {
-      supabaseService.loadAllData().then((res) => {
-        if (res.isSupabaseLive) {
-          // Merge users without wiping any locally added user
-          setUsers((currentUsers) => {
-            const userMap = new Map<string, User>();
-            INITIAL_USERS.forEach((u) => userMap.set(u.id, u));
-            currentUsers.forEach((u) => userMap.set(u.id, u));
-            res.users.forEach((u) => userMap.set(u.id, u));
-            const merged = Array.from(userMap.values());
-            saveUsers(merged);
-            return merged;
-          });
-
-          // Merge movies without wiping any locally added/favorited movie
-          setMovies((currentMovies) => {
-            const movieMap = new Map<string, Movie>();
-            INITIAL_MOVIES.forEach((m) => movieMap.set(m.id, m));
-            currentMovies.forEach((m) => movieMap.set(m.id, m));
-            res.movies.forEach((m) => movieMap.set(m.id, m));
-            const merged = Array.from(movieMap.values());
-            saveMovies(merged);
-            return merged;
-          });
-
-          // Merge comments
-          setComments((currentComments) => {
-            const commentMap = new Map<string, Comment>();
-            INITIAL_COMMENTS.forEach((c) => commentMap.set(c.id, c));
-            currentComments.forEach((c) => commentMap.set(c.id, c));
-            res.comments.forEach((c) => commentMap.set(c.id, c));
-            const merged = Array.from(commentMap.values());
-            saveComments(merged);
-            return merged;
-          });
-        }
-      });
-    }
-  }, []);
-
-  const handleSaveMovie = (
+  const handleSaveMovie = async (
     movieData: Omit<Movie, 'id' | 'createdAt' | 'likesCount' | 'likedBy'> & { id?: string }
   ) => {
     if (movieData.id) {
-      // Editing
-      const updated = movies.map((m) => {
-        if (m.id === movieData.id) {
-          const updatedMovie = { ...m, ...movieData };
-          supabaseService.saveMovie(updatedMovie, currentUser);
-          return updatedMovie;
-        }
-        return m;
-      });
-      saveMovies(updated);
-      showToast(`Filme "${movieData.title}" atualizado com sucesso!`);
+      // Editing existing movie
+      const target = movies.find((m) => m.id === movieData.id);
+      const updatedMovie: Movie = {
+        ...(target || (movieData as any)),
+        ...movieData,
+      };
+      setMovies((prev) => prev.map((m) => (m.id === updatedMovie.id ? updatedMovie : m)));
+      await supabaseService.saveMovie(updatedMovie, currentUser);
+      showToast(`Filme "${movieData.title}" atualizado no Supabase!`);
     } else {
-      // Adding new
+      // Adding new movie directly into Supabase
       const newMovie: Movie = {
         ...movieData,
         id: `mov_${Date.now()}`,
@@ -256,43 +164,37 @@ export default function HomePage() {
         likedBy: [currentUser.id],
         createdAt: new Date().toISOString().split('T')[0],
       };
-      supabaseService.saveMovie(newMovie, currentUser);
-      const updated = [newMovie, ...movies];
-      saveMovies(updated);
-      showToast(`"${newMovie.title}" adicionado aos seus favoritos!`);
+      setMovies((prev) => [newMovie, ...prev]);
+      await supabaseService.saveMovie(newMovie, currentUser);
+      showToast(`"${newMovie.title}" adicionado e salvo no Supabase!`);
     }
     setEditingMovie(null);
   };
 
-  const handleDeleteMovie = (movieId: string) => {
+  const handleDeleteMovie = async (movieId: string) => {
     const target = movies.find((m) => m.id === movieId);
-    const updated = movies.filter((m) => m.id !== movieId);
-    supabaseService.deleteMovie(movieId);
-    saveMovies(updated);
-    showToast(`"${target?.title || 'Filme'}" foi removido dos favoritos.`);
+    setMovies((prev) => prev.filter((m) => m.id !== movieId));
+    await supabaseService.deleteMovie(movieId);
+    showToast(`"${target?.title || 'Filme'}" foi removido do Supabase.`);
   };
 
-  const handleToggleLikeMovie = (movieId: string) => {
-    const updated = movies.map((m) => {
-      if (m.id === movieId) {
-        const alreadyLiked = m.likedBy?.includes(currentUser.id);
-        const newLikedBy = alreadyLiked
-          ? m.likedBy.filter((id) => id !== currentUser.id)
-          : [...(m.likedBy || []), currentUser.id];
-        const updatedMovie = {
-          ...m,
-          likedBy: newLikedBy,
-          likesCount: newLikedBy.length,
-        };
-        supabaseService.saveMovie(updatedMovie);
-        return updatedMovie;
-      }
-      return m;
-    });
-    saveMovies(updated);
+  const handleToggleLikeMovie = async (movieId: string) => {
+    const target = movies.find((m) => m.id === movieId);
+    if (!target) return;
+    const alreadyLiked = target.likedBy?.includes(currentUser.id);
+    const newLikedBy = alreadyLiked
+      ? (target.likedBy || []).filter((id) => id !== currentUser.id)
+      : [...(target.likedBy || []), currentUser.id];
+    const updatedMovie: Movie = {
+      ...target,
+      likedBy: newLikedBy,
+      likesCount: newLikedBy.length,
+    };
+    setMovies((prev) => prev.map((m) => (m.id === movieId ? updatedMovie : m)));
+    await supabaseService.saveMovie(updatedMovie);
   };
 
-  const handleAddComment = ({
+  const handleAddComment = async ({
     targetUserId,
     movieId,
     movieTitle,
@@ -318,145 +220,70 @@ export default function HomePage() {
       likedBy: [],
     };
 
-    supabaseService.saveComment(newComm, currentUser);
-    const updated = [newComm, ...comments];
-    saveComments(updated);
-    showToast('Seu recado foi publicado com sucesso!');
+    setComments((prev) => [newComm, ...prev]);
+    await supabaseService.saveComment(newComm, currentUser);
+    showToast('Seu recado foi salvo no Supabase!');
   };
 
-  const handleDeleteComment = (commentId: string) => {
-    const updated = comments.filter((c) => c.id !== commentId);
-    supabaseService.deleteComment(commentId);
-    saveComments(updated);
-    showToast('Recado removido.');
+  const handleDeleteComment = async (commentId: string) => {
+    setComments((prev) => prev.filter((c) => c.id !== commentId));
+    await supabaseService.deleteComment(commentId);
+    showToast('Recado removido do Supabase.');
   };
 
-  const handleToggleLikeComment = (commentId: string) => {
-    const updated = comments.map((c) => {
-      if (c.id === commentId) {
-        const alreadyLiked = c.likedBy?.includes(currentUser.id);
-        const newLikedBy = alreadyLiked
-          ? (c.likedBy || []).filter((id) => id !== currentUser.id)
-          : [...(c.likedBy || []), currentUser.id];
-        const updatedComment = {
-          ...c,
-          likedBy: newLikedBy,
-          likes: newLikedBy.length,
-        };
-        supabaseService.saveComment(updatedComment);
-        return updatedComment;
-      }
-      return c;
-    });
-    saveComments(updated);
+  const handleToggleLikeComment = async (commentId: string) => {
+    const target = comments.find((c) => c.id === commentId);
+    if (!target) return;
+    const alreadyLiked = target.likedBy?.includes(currentUser.id);
+    const newLikedBy = alreadyLiked
+      ? (target.likedBy || []).filter((id) => id !== currentUser.id)
+      : [...(target.likedBy || []), currentUser.id];
+    const updatedComment: Comment = {
+      ...target,
+      likedBy: newLikedBy,
+      likes: newLikedBy.length,
+    };
+    setComments((prev) => prev.map((c) => (c.id === commentId ? updatedComment : c)));
+    await supabaseService.saveComment(updatedComment);
   };
 
-  const handleSaveProfile = (updatedData: Partial<User>) => {
-    const updatedUsers = users.map((u) => {
-      if (u.id === currentUser.id) {
-        const updatedUser = { ...u, ...updatedData };
-        supabaseService.updateProfile(updatedUser);
-        return updatedUser;
-      }
-      return u;
-    });
-    saveUsers(updatedUsers);
-    showToast('Perfil atualizado com sucesso!');
+  const handleSaveProfile = async (updatedData: Partial<User>) => {
+    const updatedUser = { ...currentUser, ...updatedData };
+    setUsers((prev) => prev.map((u) => (u.id === currentUser.id ? updatedUser : u)));
+    await supabaseService.updateProfile(updatedUser);
+    showToast('Perfil atualizado no Supabase com sucesso!');
   };
 
-  const handleLoginSuccess = (user: User, isSupabaseLive: boolean) => {
+  const handleLoginSuccess = async (user: User) => {
     setUsers((prev) => {
       const exists = prev.some((u) => u.id === user.id);
-      const updated = exists ? prev.map((u) => (u.id === user.id ? user : u)) : [user, ...prev];
-      saveUsers(updated);
-      return updated;
+      return exists ? prev.map((u) => (u.id === user.id ? user : u)) : [user, ...prev];
     });
     setCurrentUserId(user.id);
     setViewedUserId(user.id);
     setIsAuthenticated(true);
-    try {
-      localStorage.setItem(STORAGE_KEY_CURRENT_USER, user.id);
-    } catch (e) {
-      console.error(e);
-    }
-    showToast(
-      isSupabaseLive
-        ? `Autenticado com sucesso via Supabase! Bem-vindo(a), ${user.name}.`
-        : `Conectado como ${user.name}!`
-    );
+    showToast(`Autenticado com sucesso via Supabase! Bem-vindo(a), ${user.name}.`);
 
-    // Immediately sync remote data from Supabase across devices
-    if (supabaseService.isConfigured()) {
-      supabaseService.loadAllData().then((res) => {
-        if (res.isSupabaseLive) {
-          if (res.movies.length > 0) {
-            setMovies((currentMovies) => {
-              const movieMap = new Map<string, Movie>();
-              INITIAL_MOVIES.forEach((m) => movieMap.set(m.id, m));
-              currentMovies.forEach((m) => movieMap.set(m.id, m));
-              res.movies.forEach((m) => movieMap.set(m.id, m));
-              const merged = Array.from(movieMap.values());
-              saveMovies(merged);
-              return merged;
-            });
-          }
-          if (res.comments.length > 0) {
-            setComments((currentComments) => {
-              const commentMap = new Map<string, Comment>();
-              INITIAL_COMMENTS.forEach((c) => commentMap.set(c.id, c));
-              currentComments.forEach((c) => commentMap.set(c.id, c));
-              res.comments.forEach((c) => commentMap.set(c.id, c));
-              const merged = Array.from(commentMap.values());
-              saveComments(merged);
-              return merged;
-            });
-          }
-        }
-      });
-    }
+    // Reload latest cloud data
+    await loadCloudData();
   };
 
-  const handleLoginAsVisitor = (name: string, bio: string, avatar: string) => {
-    const updatedUsers = users.map((u) =>
-      u.id === 'user_visitor'
-        ? {
-            ...u,
-            name: name || u.name,
-            bio: bio || u.bio,
-            avatar: avatar || u.avatar,
-          }
-        : u
-    );
-    saveUsers(updatedUsers);
-    setCurrentUserId('user_visitor');
-    setViewedUserId('user_visitor');
+  const handleLoginAsVisitor = async (name: string, bio: string, avatar: string) => {
+    const visitorUser = await supabaseService.saveVisitorProfile({ name, bio, avatar });
+    setUsers((prev) => {
+      const exists = prev.some((u) => u.id === visitorUser.id);
+      return exists ? prev.map((u) => (u.id === visitorUser.id ? visitorUser : u)) : [visitorUser, ...prev];
+    });
+    setCurrentUserId(visitorUser.id);
+    setViewedUserId(visitorUser.id);
     setIsAuthenticated(true);
-    try {
-      localStorage.setItem(STORAGE_KEY_CURRENT_USER, 'user_visitor');
-    } catch (e) {
-      console.error(e);
-    }
-    showToast(`Bem-vindo(a), ${name || 'Visitante'}! Você entrou no Lumina CineClub.`);
+    showToast(`Bem-vindo(a), ${visitorUser.name}! Conectado via Supabase.`);
   };
 
   const handleSelectUserFromLogin = (user: User) => {
     handleSelectUser(user);
     setIsAuthenticated(true);
-    if (supabaseService.isConfigured()) {
-      supabaseService.loadAllData().then((res) => {
-        if (res.isSupabaseLive && res.movies.length > 0) {
-          setMovies((currentMovies) => {
-            const movieMap = new Map<string, Movie>();
-            INITIAL_MOVIES.forEach((m) => movieMap.set(m.id, m));
-            currentMovies.forEach((m) => movieMap.set(m.id, m));
-            res.movies.forEach((m) => movieMap.set(m.id, m));
-            const merged = Array.from(movieMap.values());
-            saveMovies(merged);
-            return merged;
-          });
-        }
-      });
-    }
+    loadCloudData();
   };
 
   const handleLogout = () => {
@@ -465,29 +292,21 @@ export default function HomePage() {
     showToast('Você saiu da sua conta. Até logo!');
   };
 
-  const handleDeleteUser = (userId: string) => {
+  const handleDeleteUser = async (userId: string) => {
     const userToDelete = users.find((u) => u.id === userId);
-    const updatedUsers = users.filter((u) => u.id !== userId);
-    const updatedMovies = movies.filter((m) => m.userId !== userId);
-    const updatedComments = comments.filter((c) => c.targetUserId !== userId && c.authorId !== userId);
+    setUsers((prev) => prev.filter((u) => u.id !== userId));
+    setMovies((prev) => prev.filter((m) => m.userId !== userId));
+    setComments((prev) => prev.filter((c) => c.targetUserId !== userId && c.authorId !== userId));
 
-    const safeUsers = updatedUsers.length > 0 ? updatedUsers : INITIAL_USERS;
-    saveUsers(safeUsers);
-    saveMovies(updatedMovies);
-    saveComments(updatedComments);
-    supabaseService.deleteProfile(userId);
+    await supabaseService.deleteProfile(userId);
 
     if (currentUserId === userId) {
       setIsAuthenticated(false);
-      const nextUser = safeUsers[0];
+      const remaining = users.filter((u) => u.id !== userId);
+      const nextUser = remaining[0] || INITIAL_USERS[0];
       setCurrentUserId(nextUser.id);
       setViewedUserId(nextUser.id);
-      try {
-        localStorage.setItem(STORAGE_KEY_CURRENT_USER, nextUser.id);
-      } catch (e) {
-        console.error(e);
-      }
-      showToast(`O perfil de "${userToDelete?.name || 'usuário'}" foi excluído com sucesso.`);
+      showToast(`O perfil de "${userToDelete?.name || 'usuário'}" foi excluído do Supabase.`);
     } else {
       if (viewedUserId === userId) {
         setViewedUserId(currentUserId);
@@ -506,6 +325,8 @@ export default function HomePage() {
           onLoginAsVisitor={handleLoginAsVisitor}
           onSelectExistingUser={handleSelectUserFromLogin}
           onDeleteUser={handleDeleteUser}
+          onRefreshData={loadCloudData}
+          isLoadingData={isLoadingData}
         />
 
         {toastMessage && (
@@ -621,17 +442,13 @@ export default function HomePage() {
             <span>•</span>
             <button
               onClick={() => {
-                if (confirm('Deseja resetar os dados locais para os cinéfilos originais?')) {
-                  localStorage.removeItem(STORAGE_KEY_USERS);
-                  localStorage.removeItem(STORAGE_KEY_MOVIES);
-                  localStorage.removeItem(STORAGE_KEY_COMMENTS);
-                  localStorage.removeItem(STORAGE_KEY_CURRENT_USER);
-                  window.location.reload();
-                }
+                loadCloudData();
+                showToast('Dados sincronizados com o Supabase com sucesso!');
               }}
-              className="text-[#4D635F] hover:text-[#94A8A3]"
+              className="text-[#00D2FF] hover:underline font-semibold flex items-center gap-1.5"
             >
-              Restaurar Dados Padrão
+              <RefreshCw className={`w-3.5 h-3.5 ${isLoadingData ? 'animate-spin' : ''}`} />
+              Sincronizar com Supabase
             </button>
           </div>
         </div>
