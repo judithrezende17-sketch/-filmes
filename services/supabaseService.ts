@@ -1,12 +1,109 @@
+import { User as SupabaseAuthUser, Session, AuthChangeEvent } from '@supabase/supabase-js';
 import { getSupabaseClient, isSupabaseConfigured } from '@/lib/supabase';
 import { User, Movie, Comment } from '@/types';
-import { INITIAL_USERS, INITIAL_MOVIES, INITIAL_COMMENTS } from '@/lib/initialData';
+
+const DEFAULT_AVATAR =
+  'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=300&auto=format&fit=crop&q=80';
+const DEFAULT_BANNER =
+  'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=1200&auto=format&fit=crop&q=80';
 
 export interface AuthResult {
   success: boolean;
   user?: User;
+  needsEmailConfirmation?: boolean;
   error?: string;
   isSupabaseLive: boolean;
+}
+
+function mapAuthUserToAppUser(authUser: SupabaseAuthUser, profile?: Record<string, any> | null): User {
+  const emailPrefix = authUser.email ? authUser.email.split('@')[0] : 'cinefilo';
+  const meta = authUser.user_metadata || {};
+
+  return {
+    id: authUser.id,
+    name: profile?.name || meta.name || emailPrefix,
+    username: profile?.username || meta.username || emailPrefix,
+    avatar: profile?.avatar || meta.avatar || DEFAULT_AVATAR,
+    bannerUrl: profile?.banner_url || DEFAULT_BANNER,
+    bio: profile?.bio || meta.bio || 'Membro do Lumina CineClub.',
+    favoriteGenre: profile?.favorite_genre || meta.favorite_genre || 'Ficção Científica',
+    badge: profile?.badge || 'Cinéfilo Membro',
+    joinedDate: profile?.joined_date || 'Hoje',
+    followersCount: Number(profile?.followers_count) || 0,
+    followingCount: Number(profile?.following_count) || 0,
+    isGuest: false,
+  };
+}
+
+async function tryEnsureProfileRow(
+  authUser: SupabaseAuthUser,
+  overrides?: Partial<User>
+): Promise<Record<string, any> | null> {
+  try {
+    const supabase = getSupabaseClient();
+    const { data: existing, error: selectErr } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', authUser.id)
+      .maybeSingle();
+
+    if (selectErr) {
+      console.warn('Não foi possível consultar public.profiles (RLS/tabela):', selectErr.message);
+    }
+
+    if (existing) {
+      return existing;
+    }
+
+    const appUser = mapAuthUserToAppUser(authUser);
+    const payload = {
+      id: authUser.id,
+      name: overrides?.name || appUser.name,
+      username: overrides?.username || appUser.username,
+      email: authUser.email?.toLowerCase().trim() || null,
+      avatar: overrides?.avatar || appUser.avatar,
+      banner_url: overrides?.bannerUrl || appUser.bannerUrl,
+      bio: overrides?.bio || appUser.bio,
+      favorite_genre: overrides?.favoriteGenre || appUser.favoriteGenre,
+      badge: overrides?.badge || appUser.badge,
+      joined_date: overrides?.joinedDate || appUser.joinedDate,
+      followers_count: overrides?.followersCount ?? appUser.followersCount,
+      following_count: overrides?.followingCount ?? appUser.followingCount,
+    };
+
+    const { data: inserted, error: insertError } = await supabase
+      .from('profiles')
+      .upsert(payload)
+      .select('*')
+      .maybeSingle();
+
+    if (insertError) {
+      // Handle unique username conflict without failing authentication
+      if (insertError.code === '23505') {
+        const suffixPayload = {
+          ...payload,
+          username: `${payload.username}_${authUser.id.slice(0, 6)}`,
+        };
+        const { data: retryData, error: retryErr } = await supabase
+          .from('profiles')
+          .upsert(suffixPayload)
+          .select('*')
+          .maybeSingle();
+        if (retryErr) {
+          console.warn('Aviso ao salvar perfil auxiliar no Supabase:', retryErr.message);
+          return null;
+        }
+        return retryData;
+      }
+      console.warn('Aviso ao criar perfil auxiliar (RLS ou permissão):', insertError.message);
+      return null;
+    }
+
+    return inserted || payload;
+  } catch (err) {
+    console.warn('Exceção não-bloqueante ao sincronizar public.profiles:', err);
+    return null;
+  }
 }
 
 export const supabaseService = {
@@ -15,9 +112,9 @@ export const supabaseService = {
   },
 
   /**
-   * Register a new user directly in Supabase.
-   * Resilient to Supabase built-in mailer rate limits (status 429):
-   * Always persists in public.profiles so registration NEVER fails.
+   * Real Supabase Auth sign up.
+   * Calls supabase.auth.signUp directly first with zero prior queries/inserts to auxiliary tables.
+   * Non-blocking best-effort profile sync happens only AFTER signUp succeeds.
    */
   async signUpWithEmail(params: {
     email: string;
@@ -28,354 +125,340 @@ export const supabaseService = {
     bio: string;
     avatar: string;
   }): Promise<AuthResult> {
-    const supabase = getSupabaseClient();
-    const cleanEmail = params.email.toLowerCase().trim();
-    const cleanUsername = params.username.toLowerCase().trim().replace(/^@/, '');
+    if (!isSupabaseConfigured()) {
+      const configError =
+        'Cliente Supabase não configurado. Verifique NEXT_PUBLIC_SUPABASE_URL e NEXT_PUBLIC_SUPABASE_ANON_KEY no .env.local ou no modal "Configurações Supabase".';
+      console.error(configError);
+      return {
+        success: false,
+        error: configError,
+        isSupabaseLive: false,
+      };
+    }
+
+    const cleanEmail = params.email.trim().toLowerCase();
+    const rawUsername = params.username.trim().toLowerCase().replace(/^@/, '');
+    const cleanUsername =
+      rawUsername.replace(/[^a-z0-9_]/g, '') || cleanEmail.split('@')[0] || 'cinefilo';
+    const cleanName = params.name.trim() || cleanEmail.split('@')[0] || 'Cinéfilo';
+    const cleanBio = params.bio.trim() || 'Membro do Lumina CineClub.';
+    const cleanGenre = params.favoriteGenre || 'Ficção Científica';
+    const cleanAvatar = params.avatar || DEFAULT_AVATAR;
 
     try {
-      // 1. Check if user profile already exists with this email or username in public.profiles
-      const { data: existingProfile } = await supabase
-        .from('profiles')
-        .select('*')
-        .or(`email.ilike.${cleanEmail},username.ilike.${cleanUsername}`)
-        .limit(1)
-        .maybeSingle();
+      const supabase = getSupabaseClient();
 
-      let targetUserId = existingProfile?.id;
-
-      // 2. Attempt Supabase Auth registration
-      try {
-        const { data: authData, error: authError } = await supabase.auth.signUp({
-          email: cleanEmail,
-          password: params.password,
-          options: {
-            data: {
-              name: params.name.trim(),
-              username: cleanUsername,
-            },
-          },
-        });
-
-        if (authData?.user?.id) {
-          targetUserId = authData.user.id;
-        }
-
-        // If auth error is about wrong API key, alert user
-        if (authError) {
-          const msgLower = (authError.message || '').toLowerCase();
-          if (
-            (msgLower.includes('api key') || msgLower.includes('jwt')) &&
-            authError.status === 401
-          ) {
-            return {
-              success: false,
-              error: 'Chave do Supabase inválida. Verifique suas credenciais em Configurações.',
-              isSupabaseLive: true,
-            };
-          }
-          // Note: If error is 'email rate limit exceeded' (429) or 'already registered',
-          // we gracefully continue and ensure the profile is saved in public.profiles below.
-        }
-      } catch (authEx) {
-        console.warn('Supabase auth.signUp handled notice:', authEx);
-      }
-
-      // Generate a persistent user ID if Supabase Auth didn't return one
-      const userId = targetUserId || `user_${Date.now()}`;
-
-      const newUser: User = {
-        id: userId,
-        name: params.name.trim() || cleanEmail.split('@')[0],
-        username: cleanUsername || cleanEmail.split('@')[0],
-        avatar:
-          params.avatar ||
-          'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=300&auto=format&fit=crop&q=80',
-        bannerUrl:
-          'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=1200&auto=format&fit=crop&q=80',
-        bio: params.bio.trim() || 'Membro do Lumina CineClub.',
-        favoriteGenre: params.favoriteGenre || 'Ficção Científica',
-        badge: 'Cinéfilo Membro',
-        joinedDate: 'Hoje',
-        followersCount: 0,
-        followingCount: 3,
-        isGuest: false,
-      };
-
-      // 3. Persist profile directly into Supabase public.profiles table
-      const profilePayload: Record<string, any> = {
-        id: newUser.id,
-        name: newUser.name,
-        username: newUser.username,
+      const { data: authData, error: authError } = await supabase.auth.signUp({
         email: cleanEmail,
-        avatar: newUser.avatar,
-        banner_url: newUser.bannerUrl,
-        bio: newUser.bio,
-        favorite_genre: newUser.favoriteGenre,
-        badge: newUser.badge,
-        joined_date: newUser.joinedDate,
-        followers_count: newUser.followersCount,
-        following_count: newUser.followingCount,
+        password: params.password,
+        options: {
+          data: {
+            name: cleanName,
+            username: cleanUsername,
+            favorite_genre: cleanGenre,
+            bio: cleanBio,
+            avatar: cleanAvatar,
+          },
+        },
+      });
+
+      if (authError) {
+        console.error('Supabase auth.signUp error:', authError);
+        return {
+          success: false,
+          error: authError.message,
+          isSupabaseLive: true,
+        };
+      }
+
+      if (!authData?.user) {
+        const missingUserErr = 'O Supabase Auth não retornou nenhum usuário após o cadastro.';
+        console.error(missingUserErr, authData);
+        return {
+          success: false,
+          error: missingUserErr,
+          isSupabaseLive: true,
+        };
+      }
+
+      // Supabase returns empty identities array when email already exists and confirm email is enabled
+      if (Array.isArray(authData.user.identities) && authData.user.identities.length === 0) {
+        const dupErr = 'User already registered';
+        console.error('Supabase auth.signUp duplicate email:', dupErr);
+        return {
+          success: false,
+          error: dupErr,
+          isSupabaseLive: true,
+        };
+      }
+
+      // Non-blocking best-effort sync to public.profiles AFTER signUp succeeded
+      const profileRow = await tryEnsureProfileRow(authData.user, {
+        name: cleanName,
+        username: cleanUsername,
+        favoriteGenre: cleanGenre,
+        bio: cleanBio,
+        avatar: cleanAvatar,
+      });
+
+      const appUser = mapAuthUserToAppUser(authData.user, profileRow);
+
+      return {
+        success: true,
+        user: appUser,
+        needsEmailConfirmation: !authData.session,
+        isSupabaseLive: true,
       };
-
-      const { error: profileError } = await supabase.from('profiles').upsert(profilePayload);
-
-      if (profileError) {
-        console.warn('Supabase profiles upsert error:', profileError.message);
-        // If unique constraint error on username, try appending a short suffix
-        if (profileError.code === '23505') {
-          profilePayload.username = `${cleanUsername}_${Math.floor(Math.random() * 900 + 100)}`;
-          newUser.username = profilePayload.username;
-          await supabase.from('profiles').upsert(profilePayload);
-        }
-      }
-
-      return { success: true, user: newUser, isSupabaseLive: true };
     } catch (err: any) {
-      let msg = err?.message || 'Erro ao processar cadastro no Supabase.';
-      if (msg.includes('ISO-8859-1') || msg.includes('ByteString') || msg.includes('headers')) {
-        msg = 'Credenciais com caracteres especiais. Higienizadas automaticamente. Tente novamente.';
-      }
-      return { success: false, error: msg, isSupabaseLive: true };
+      console.error('Supabase signUp exception:', err);
+      return {
+        success: false,
+        error: err?.message || 'Erro inesperado ao cadastrar no Supabase Auth.',
+        isSupabaseLive: isSupabaseConfigured(),
+      };
     }
   },
 
   /**
-   * Sign in with email or @username directly via Supabase.
-   * Cross-device verified: works identically on mobile and desktop.
+   * Real Supabase Auth sign in.
+   * If input contains an email (@ with domain), calls supabase.auth.signInWithPassword directly
+   * without querying any profile table beforehand.
+   * Only queries public.profiles if the user entered a @username without an email domain.
    */
   async signInWithEmail(identifier: string, password: string): Promise<AuthResult> {
-    const supabase = getSupabaseClient();
+    if (!isSupabaseConfigured()) {
+      const configError =
+        'Cliente Supabase não configurado. Verifique NEXT_PUBLIC_SUPABASE_URL e NEXT_PUBLIC_SUPABASE_ANON_KEY no .env.local ou no modal "Configurações Supabase".';
+      console.error(configError);
+      return {
+        success: false,
+        error: configError,
+        isSupabaseLive: false,
+      };
+    }
+
     const cleanIdentifier = identifier.trim().toLowerCase();
 
     try {
-      let targetEmail = cleanIdentifier;
+      const supabase = getSupabaseClient();
+      let emailToAuth = cleanIdentifier;
 
-      // 1. Check if user profile exists in public.profiles (by email or username)
-      const cleanUser = cleanIdentifier.replace(/^@/, '');
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('*')
-        .or(`email.ilike.${cleanIdentifier},username.ilike.${cleanUser}`)
-        .limit(1)
-        .maybeSingle();
+      // Check if user entered a @username without email domain (e.g. "@judith" or "judith")
+      const isEmailInput = cleanIdentifier.includes('@') && !cleanIdentifier.startsWith('@');
 
-      if (profile) {
-        if (profile.email) {
-          targetEmail = profile.email.toLowerCase().trim();
-        }
+      if (!isEmailInput) {
+        const cleanUsername = cleanIdentifier.replace(/^@/, '');
+        const { data: profile, error: profileError } = await supabase
+          .from('profiles')
+          .select('email')
+          .ilike('username', cleanUsername)
+          .limit(1)
+          .maybeSingle();
 
-        const user: User = {
-          id: profile.id,
-          name: profile.name || cleanUser,
-          username: profile.username || cleanUser,
-          avatar:
-            profile.avatar ||
-            'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=300&auto=format&fit=crop&q=80',
-          bannerUrl:
-            profile.banner_url ||
-            'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=1200&auto=format&fit=crop&q=80',
-          bio: profile.bio || 'Membro do Lumina CineClub.',
-          favoriteGenre: profile.favorite_genre || 'Cinema',
-          badge: profile.badge || 'Cinéfilo Membro',
-          joinedDate: profile.joined_date || 'Hoje',
-          followersCount: profile.followers_count || 0,
-          followingCount: profile.following_count || 0,
-          isGuest: false,
-        };
-
-        // 2. Attempt Supabase Auth verification
-        try {
-          const { error: authError } = await supabase.auth.signInWithPassword({
-            email: targetEmail,
-            password,
-          });
-
-          if (!authError) {
-            return { success: true, user, isSupabaseLive: true };
-          }
-
-          const code = (authError as any).code || '';
-          const msgLower = (authError.message || '').toLowerCase();
-
-          // If email is unconfirmed or email rate limited, credentials are valid!
-          if (
-            code === 'email_not_confirmed' ||
-            code === 'over_email_send_rate_limit' ||
-            msgLower.includes('email not confirmed') ||
-            (authError as any).status === 429
-          ) {
-            return { success: true, user, isSupabaseLive: true };
-          }
-
-          if (code === 'invalid_credentials' || msgLower.includes('invalid login credentials')) {
-            return {
-              success: false,
-              error: 'Senha incorreta para esta conta. Você também pode acessar com 1 clique pelo seu perfil na aba "Perfis Salvos".',
-              isSupabaseLive: true,
-            };
-          }
-        } catch {
-          // If auth threw transient error, allow profile sign-in
-        }
-
-        return { success: true, user, isSupabaseLive: true };
-      }
-
-      // 3. Profile wasn't found by username/email, try Supabase Auth directly
-      if (cleanIdentifier.includes('@')) {
-        const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
-          email: targetEmail,
-          password,
-        });
-
-        if (authError) {
+        if (profileError) {
+          console.error('Supabase username lookup error:', profileError);
           return {
             success: false,
-            error: 'E-mail ou senha incorretos no Supabase.',
+            error: profileError.message,
             isSupabaseLive: true,
           };
         }
 
-        if (authData.user) {
-          const fallbackUser: User = {
-            id: authData.user.id,
-            name: authData.user.user_metadata?.name || targetEmail.split('@')[0],
-            username: authData.user.user_metadata?.username || targetEmail.split('@')[0],
-            avatar:
-              'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=300&auto=format&fit=crop&q=80',
-            bannerUrl:
-              'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=1200&auto=format&fit=crop&q=80',
-            bio: 'Membro do Lumina CineClub.',
-            favoriteGenre: 'Cinema em Geral',
-            badge: 'Cinéfilo Membro',
-            joinedDate: 'Hoje',
-            followersCount: 0,
-            followingCount: 3,
-            isGuest: false,
+        if (!profile?.email) {
+          const notFoundMsg = `Usuário @${cleanUsername} não encontrado com e-mail associado. Tente entrar usando seu e-mail completo.`;
+          console.error(notFoundMsg);
+          return {
+            success: false,
+            error: notFoundMsg,
+            isSupabaseLive: true,
           };
-
-          await supabase.from('profiles').upsert({
-            id: fallbackUser.id,
-            name: fallbackUser.name,
-            username: fallbackUser.username,
-            email: targetEmail,
-            avatar: fallbackUser.avatar,
-            banner_url: fallbackUser.bannerUrl,
-            bio: fallbackUser.bio,
-            favorite_genre: fallbackUser.favoriteGenre,
-            badge: fallbackUser.badge,
-            joined_date: fallbackUser.joinedDate,
-            followers_count: fallbackUser.followersCount,
-            following_count: fallbackUser.followingCount,
-          });
-
-          return { success: true, user: fallbackUser, isSupabaseLive: true };
         }
+
+        emailToAuth = profile.email.trim().toLowerCase();
       }
 
+      const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+        email: emailToAuth,
+        password,
+      });
+
+      if (authError) {
+        console.error('Supabase auth.signInWithPassword error:', authError);
+        return {
+          success: false,
+          error: authError.message,
+          isSupabaseLive: true,
+        };
+      }
+
+      if (!authData?.user) {
+        const noUserMsg = 'O Supabase Auth não retornou dados de usuário para esta sessão.';
+        console.error(noUserMsg, authData);
+        return {
+          success: false,
+          error: noUserMsg,
+          isSupabaseLive: true,
+        };
+      }
+
+      // Best-effort profile sync after authentication succeeds
+      const profileRow = await tryEnsureProfileRow(authData.user);
+      const appUser = mapAuthUserToAppUser(authData.user, profileRow);
+
       return {
-        success: false,
-        error: 'Conta não encontrada no Supabase. Crie sua conta na aba "Cadastrar".',
+        success: true,
+        user: appUser,
         isSupabaseLive: true,
       };
     } catch (err: any) {
-      return { success: false, error: err?.message || 'Erro ao autenticar', isSupabaseLive: true };
+      console.error('Supabase signInWithPassword exception:', err);
+      return {
+        success: false,
+        error: err?.message || 'Erro inesperado ao autenticar no Supabase Auth.',
+        isSupabaseLive: isSupabaseConfigured(),
+      };
     }
   },
 
   /**
-   * Save or update visitor profile directly in Supabase so foreign keys in movies/comments work
+   * Reads the real active Supabase session via supabase.auth.getSession().
    */
-  async saveVisitorProfile(params: {
-    name: string;
-    bio: string;
-    avatar: string;
-  }): Promise<User> {
-    const supabase = getSupabaseClient();
-    const visitorUser: User = {
-      id: 'user_visitor',
-      name: params.name.trim() || 'Visitante Cinéfilo',
-      username: 'visitante',
-      avatar:
-        params.avatar ||
-        'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=300&auto=format&fit=crop&q=80',
-      bannerUrl:
-        'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=1200&auto=format&fit=crop&q=80',
-      bio: params.bio.trim() || 'Explorando o Lumina CineClub.',
-      favoriteGenre: 'Ficção Científica',
-      badge: 'Cinéfilo Visitante',
-      joinedDate: 'Hoje',
-      followersCount: 12,
-      followingCount: 3,
-      isGuest: true,
-    };
-
-    try {
-      await supabase.from('profiles').upsert({
-        id: visitorUser.id,
-        name: visitorUser.name,
-        username: visitorUser.username,
-        avatar: visitorUser.avatar,
-        banner_url: visitorUser.bannerUrl,
-        bio: visitorUser.bio,
-        favorite_genre: visitorUser.favoriteGenre,
-        badge: visitorUser.badge,
-        joined_date: visitorUser.joinedDate,
-        followers_count: visitorUser.followersCount,
-        following_count: visitorUser.followingCount,
-      });
-    } catch (e) {
-      console.warn('Could not persist visitor in Supabase:', e);
+  async getSessionUser(): Promise<{
+    user: User | null;
+    session: Session | null;
+    error?: string;
+  }> {
+    if (!isSupabaseConfigured()) {
+      return {
+        user: null,
+        session: null,
+        error:
+          'Cliente Supabase não configurado. Verifique as credenciais no .env.local ou no modal "Configurações Supabase".',
+      };
     }
 
-    return visitorUser;
-  },
-
-  async signOut(): Promise<void> {
-    const supabase = getSupabaseClient();
     try {
-      await supabase.auth.signOut();
-    } catch (e) {
-      console.warn('Error signing out of Supabase:', e);
+      const supabase = getSupabaseClient();
+      const { data, error } = await supabase.auth.getSession();
+
+      if (error) {
+        console.error('Supabase getSession error:', error);
+        return { user: null, session: null, error: error.message };
+      }
+
+      const session = data.session;
+      if (!session?.user) {
+        return { user: null, session: null };
+      }
+
+      const profileRow = await tryEnsureProfileRow(session.user);
+      return {
+        user: mapAuthUserToAppUser(session.user, profileRow),
+        session,
+      };
+    } catch (err: any) {
+      console.error('Supabase getSession exception:', err);
+      return {
+        user: null,
+        session: null,
+        error: err?.message || 'Erro ao verificar sessão no Supabase.',
+      };
     }
   },
 
   /**
-   * Load ALL data exclusively from Supabase cloud database.
-   * Zero localStorage used.
+   * Subscribes to real-time Supabase auth state changes (SIGNED_IN, SIGNED_OUT, TOKEN_REFRESHED, etc.).
+   */
+  onAuthStateChange(
+    callback: (event: AuthChangeEvent, user: User | null, session: Session | null) => void
+  ): (() => void) {
+    if (!isSupabaseConfigured()) {
+      return () => {};
+    }
+
+    try {
+      const supabase = getSupabaseClient();
+      const {
+        data: { subscription },
+      } = supabase.auth.onAuthStateChange(async (event, session) => {
+        if (session?.user) {
+          const profileRow = await tryEnsureProfileRow(session.user);
+          callback(event, mapAuthUserToAppUser(session.user, profileRow), session);
+        } else {
+          callback(event, null, null);
+        }
+      });
+
+      return () => {
+        subscription.unsubscribe();
+      };
+    } catch (err) {
+      console.error('Failed to subscribe to onAuthStateChange:', err);
+      return () => {};
+    }
+  },
+
+  async signOut(): Promise<{ error?: string }> {
+    if (!isSupabaseConfigured()) return {};
+    try {
+      const supabase = getSupabaseClient();
+      const { error } = await supabase.auth.signOut();
+      if (error) {
+        console.error('Supabase signOut error:', error);
+        return { error: error.message };
+      }
+      return {};
+    } catch (err: any) {
+      console.error('Supabase signOut exception:', err);
+      return { error: err?.message || 'Erro ao sair da conta.' };
+    }
+  },
+
+  /**
+   * Load ALL data exclusively from Supabase cloud database (no mock fallback).
    */
   async loadAllData(): Promise<{
     users: User[];
     movies: Movie[];
     comments: Comment[];
     isSupabaseLive: boolean;
+    error?: string;
   }> {
-    const supabase = getSupabaseClient();
+    if (!isSupabaseConfigured()) {
+      return {
+        users: [],
+        movies: [],
+        comments: [],
+        isSupabaseLive: false,
+        error: 'Cliente Supabase não configurado.',
+      };
+    }
 
     try {
+      const supabase = getSupabaseClient();
       const [profilesRes, moviesRes, commentsRes] = await Promise.all([
         supabase.from('profiles').select('*').order('created_at', { ascending: false }),
         supabase.from('movies').select('*').order('created_at', { ascending: false }),
         supabase.from('comments').select('*').order('created_at', { ascending: false }),
       ]);
 
+      if (profilesRes.error) console.error('Erro ao carregar profiles:', profilesRes.error);
+      if (moviesRes.error) console.error('Erro ao carregar movies:', moviesRes.error);
+      if (commentsRes.error) console.error('Erro ao carregar comments:', commentsRes.error);
+
       const remoteUsers: User[] = (profilesRes.data || []).map((p) => ({
         id: p.id,
         name: p.name || 'Cinéfilo',
-        username: p.username || 'cinéfilo',
-        avatar:
-          p.avatar ||
-          'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=300&auto=format&fit=crop&q=80',
-        bannerUrl:
-          p.banner_url ||
-          'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=1200&auto=format&fit=crop&q=80',
+        username: p.username || 'cinefilo',
+        avatar: p.avatar || DEFAULT_AVATAR,
+        bannerUrl: p.banner_url || DEFAULT_BANNER,
         bio: p.bio || 'Membro da comunidade Lumina CineClub.',
         favoriteGenre: p.favorite_genre || 'Cinema em Geral',
         badge: p.badge || 'Cinéfilo Membro',
         joinedDate: p.joined_date || 'Hoje',
         followersCount: Number(p.followers_count) || 0,
         followingCount: Number(p.following_count) || 0,
-        isGuest: p.id === 'user_visitor',
+        isGuest: false,
       }));
 
       const remoteMovies: Movie[] = (moviesRes.data || []).map((m) => ({
@@ -408,40 +491,36 @@ export const supabaseService = {
         authorId: c.author_id,
         authorName: c.author_name || 'Cinéfilo',
         authorUsername: c.author_username || 'usuario',
-        authorAvatar:
-          c.author_avatar ||
-          'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=300&auto=format&fit=crop&q=80',
+        authorAvatar: c.author_avatar || DEFAULT_AVATAR,
         content: c.content || '',
         createdAt: c.created_at ? new Date(c.created_at).toLocaleDateString('pt-BR') : 'Hoje',
         likes: Number(c.likes) || 0,
         likedBy: Array.isArray(c.liked_by) ? c.liked_by : [],
       }));
 
-      // If Supabase has users or movies, return cloud data
-      if (remoteUsers.length > 0) {
-        return {
-          users: remoteUsers,
-          movies: remoteMovies,
-          comments: remoteComments,
-          isSupabaseLive: true,
-        };
-      }
-    } catch (e) {
-      console.warn('Could not fetch from Supabase tables:', e);
+      return {
+        users: remoteUsers,
+        movies: remoteMovies,
+        comments: remoteComments,
+        isSupabaseLive: true,
+      };
+    } catch (err: any) {
+      console.error('Could not fetch from Supabase tables:', err);
+      return {
+        users: [],
+        movies: [],
+        comments: [],
+        isSupabaseLive: false,
+        error: err?.message || 'Erro ao carregar dados do Supabase.',
+      };
     }
-
-    return {
-      users: INITIAL_USERS,
-      movies: INITIAL_MOVIES,
-      comments: INITIAL_COMMENTS,
-      isSupabaseLive: false,
-    };
   },
 
   /**
    * Save a movie directly in Supabase table 'movies'.
    */
   async saveMovie(movie: Movie, user?: User): Promise<boolean> {
+    if (!isSupabaseConfigured()) return false;
     const supabase = getSupabaseClient();
 
     try {
@@ -451,8 +530,7 @@ export const supabaseService = {
           name: user.name,
           username: user.username,
           avatar: user.avatar,
-          banner_url:
-            user.bannerUrl || 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=1200',
+          banner_url: user.bannerUrl || DEFAULT_BANNER,
           bio: user.bio || '',
           favorite_genre: user.favoriteGenre || 'Cinema',
           badge: user.badge || 'Cinéfilo Membro',
@@ -480,12 +558,12 @@ export const supabaseService = {
       });
 
       if (error) {
-        console.warn('Error saving movie to Supabase:', error.message);
+        console.error('Error saving movie to Supabase:', error);
         return false;
       }
       return true;
     } catch (e) {
-      console.warn('Failed to upsert movie in Supabase:', e);
+      console.error('Failed to upsert movie in Supabase:', e);
       return false;
     }
   },
@@ -494,17 +572,18 @@ export const supabaseService = {
    * Delete a movie directly from Supabase table 'movies'.
    */
   async deleteMovie(movieId: string): Promise<boolean> {
+    if (!isSupabaseConfigured()) return false;
     const supabase = getSupabaseClient();
 
     try {
       const { error } = await supabase.from('movies').delete().eq('id', movieId);
       if (error) {
-        console.warn('Failed to delete movie from Supabase:', error.message);
+        console.error('Failed to delete movie from Supabase:', error);
         return false;
       }
       return true;
     } catch (e) {
-      console.warn('Exception deleting movie in Supabase:', e);
+      console.error('Exception deleting movie in Supabase:', e);
       return false;
     }
   },
@@ -513,6 +592,7 @@ export const supabaseService = {
    * Save a comment directly in Supabase table 'comments'.
    */
   async saveComment(comment: Comment, authorUser?: User): Promise<boolean> {
+    if (!isSupabaseConfigured()) return false;
     const supabase = getSupabaseClient();
 
     try {
@@ -522,8 +602,7 @@ export const supabaseService = {
           name: authorUser.name,
           username: authorUser.username,
           avatar: authorUser.avatar,
-          banner_url:
-            authorUser.bannerUrl || 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=1200',
+          banner_url: authorUser.bannerUrl || DEFAULT_BANNER,
           bio: authorUser.bio || '',
           favorite_genre: authorUser.favoriteGenre || 'Cinema',
           badge: authorUser.badge || 'Cinéfilo Membro',
@@ -548,12 +627,12 @@ export const supabaseService = {
       });
 
       if (error) {
-        console.warn('Error saving comment to Supabase:', error.message);
+        console.error('Error saving comment to Supabase:', error);
         return false;
       }
       return true;
     } catch (e) {
-      console.warn('Failed to save comment in Supabase:', e);
+      console.error('Failed to save comment in Supabase:', e);
       return false;
     }
   },
@@ -562,17 +641,18 @@ export const supabaseService = {
    * Delete a comment directly from Supabase table 'comments'.
    */
   async deleteComment(commentId: string): Promise<boolean> {
+    if (!isSupabaseConfigured()) return false;
     const supabase = getSupabaseClient();
 
     try {
       const { error } = await supabase.from('comments').delete().eq('id', commentId);
       if (error) {
-        console.warn('Failed to delete comment from Supabase:', error.message);
+        console.error('Failed to delete comment from Supabase:', error);
         return false;
       }
       return true;
     } catch (e) {
-      console.warn('Failed to delete comment from Supabase:', e);
+      console.error('Failed to delete comment from Supabase:', e);
       return false;
     }
   },
@@ -581,6 +661,7 @@ export const supabaseService = {
    * Update profile directly in Supabase table 'profiles'.
    */
   async updateProfile(user: User): Promise<boolean> {
+    if (!isSupabaseConfigured()) return false;
     const supabase = getSupabaseClient();
 
     try {
@@ -598,12 +679,12 @@ export const supabaseService = {
       });
 
       if (error) {
-        console.warn('Failed to update profile in Supabase:', error.message);
+        console.error('Failed to update profile in Supabase:', error);
         return false;
       }
       return true;
     } catch (e) {
-      console.warn('Exception updating profile in Supabase:', e);
+      console.error('Exception updating profile in Supabase:', e);
       return false;
     }
   },
@@ -612,6 +693,7 @@ export const supabaseService = {
    * Delete a profile and all associated data directly from Supabase.
    */
   async deleteProfile(userId: string): Promise<boolean> {
+    if (!isSupabaseConfigured()) return false;
     const supabase = getSupabaseClient();
 
     try {
@@ -621,12 +703,12 @@ export const supabaseService = {
       const { error } = await supabase.from('profiles').delete().eq('id', userId);
 
       if (error) {
-        console.warn('Failed to delete profile from Supabase:', error.message);
+        console.error('Failed to delete profile from Supabase:', error);
         return false;
       }
       return true;
     } catch (e) {
-      console.warn('Exception deleting profile in Supabase:', e);
+      console.error('Exception deleting profile in Supabase:', e);
       return false;
     }
   },

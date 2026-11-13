@@ -1,8 +1,7 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { User, Movie, Comment } from '@/types';
-import { INITIAL_USERS, INITIAL_MOVIES, INITIAL_COMMENTS } from '@/lib/initialData';
 import { Navbar } from '@/components/Navbar';
 import { ProfileView } from '@/components/ProfileView';
 import { CommunityView } from '@/components/CommunityView';
@@ -17,22 +16,25 @@ import { supabaseService } from '@/services/supabaseService';
 import { Film, CheckCircle2, LogOut, RefreshCw } from 'lucide-react';
 
 export default function HomePage() {
-  // Application Data States - 100% cloud-authoritative in Supabase (Zero localStorage)
-  const [users, setUsers] = useState<User[]>(INITIAL_USERS);
-  const [movies, setMovies] = useState<Movie[]>(INITIAL_MOVIES);
-  const [comments, setComments] = useState<Comment[]>(INITIAL_COMMENTS);
+  // Real Supabase Auth session state (zero localStorage/mock fallback)
+  const [authUser, setAuthUser] = useState<User | null>(null);
+  const [isCheckingAuth, setIsCheckingAuth] = useState<boolean>(true);
+  const [authConfigError, setAuthConfigError] = useState<string | null>(null);
+  const [credsVersion, setCredsVersion] = useState<number>(0);
 
-  const [currentUserId, setCurrentUserId] = useState<string>(INITIAL_USERS[0].id);
-  const [viewedUserId, setViewedUserId] = useState<string>(INITIAL_USERS[0].id);
+  // Cloud database states
+  const [users, setUsers] = useState<User[]>([]);
+  const [movies, setMovies] = useState<Movie[]>([]);
+  const [comments, setComments] = useState<Comment[]>([]);
+  const [viewedUserId, setViewedUserId] = useState<string>('');
 
   // Cloud sync loading indicator
-  const [isLoadingData, setIsLoadingData] = useState<boolean>(true);
-
-  // User Authentication State - Starts false so app starts on the Login Screen
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [isLoadingData, setIsLoadingData] = useState<boolean>(false);
 
   // Active View Tab
-  const [activeTab, setActiveTab] = useState<'my-profile' | 'community' | 'all-movies' | 'guestbook-feed'>('my-profile');
+  const [activeTab, setActiveTab] = useState<
+    'my-profile' | 'community' | 'all-movies' | 'guestbook-feed'
+  >('my-profile');
 
   // Search filter
   const [searchTerm, setSearchTerm] = useState('');
@@ -47,93 +49,107 @@ export default function HomePage() {
   // Transient Toast Notification
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  const showToast = (msg: string) => {
+  const showToast = useCallback((msg: string) => {
     setToastMessage(msg);
     setTimeout(() => {
       setToastMessage(null);
     }, 3500);
-  };
+  }, []);
 
   /**
    * Load authoritative data directly from Supabase tables (profiles, movies, comments).
-   * Cross-device guarantee: mobile and desktop always see the exact same cloud database.
    */
   const loadCloudData = useCallback(async () => {
     setIsLoadingData(true);
     try {
       const res = await supabaseService.loadAllData();
       if (res.isSupabaseLive) {
-        if (res.users.length > 0) {
-          setUsers(res.users);
-        }
-        if (res.movies.length > 0) {
-          setMovies(res.movies);
-        }
-        if (res.comments.length > 0) {
-          setComments(res.comments);
-        }
+        setUsers(res.users);
+        setMovies(res.movies);
+        setComments(res.comments);
       }
     } catch (e) {
-      console.warn('Failed to load cloud data from Supabase:', e);
+      console.error('Failed to load cloud data from Supabase:', e);
     } finally {
       setIsLoadingData(false);
     }
   }, []);
 
-  // Fetch Supabase cloud data on initial mount without synchronous setState in effect body
+  // Initialize and subscribe to real Supabase Auth session (getSession + onAuthStateChange)
   useEffect(() => {
     let isMounted = true;
 
-    supabaseService
-      .loadAllData()
-      .then((res) => {
-        if (!isMounted) return;
-        if (res.isSupabaseLive) {
-          if (res.users.length > 0) setUsers(res.users);
-          if (res.movies.length > 0) setMovies(res.movies);
-          if (res.comments.length > 0) setComments(res.comments);
+    supabaseService.getSessionUser().then(({ user, error }) => {
+      if (!isMounted) return;
+      if (error) {
+        setAuthConfigError(error);
+      } else {
+        setAuthConfigError(null);
+      }
+
+      if (user) {
+        setAuthUser(user);
+        setViewedUserId((prev) => prev || user.id);
+        loadCloudData();
+      } else {
+        setAuthUser(null);
+      }
+      setIsCheckingAuth(false);
+    });
+
+    const unsubscribe = supabaseService.onAuthStateChange((event, user) => {
+      if (!isMounted) return;
+      if (user) {
+        setAuthUser(user);
+        setAuthConfigError(null);
+        setViewedUserId((prev) => (event === 'SIGNED_IN' || !prev ? user.id : prev));
+        if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
+          loadCloudData();
         }
-      })
-      .catch((e) => {
-        console.warn('Error fetching Supabase cloud data on mount:', e);
-      })
-      .finally(() => {
-        if (isMounted) {
-          setIsLoadingData(false);
-        }
-      });
+      } else if (event === 'SIGNED_OUT') {
+        setAuthUser(null);
+        setViewedUserId('');
+        setIsAuthModalOpen(false);
+      }
+      setIsCheckingAuth(false);
+    });
 
     return () => {
       isMounted = false;
+      unsubscribe();
     };
-  }, []);
+  }, [credsVersion, loadCloudData]);
 
-  // Current active user object
-  const currentUser = users.find((u) => u.id === currentUserId) || users[0] || INITIAL_USERS[0];
+  // Merge authUser into users list in case public.profiles insert was blocked by RLS
+  const allUsers = useMemo(() => {
+    if (!authUser) return users;
+    const exists = users.some((u) => u.id === authUser.id);
+    return exists ? users.map((u) => (u.id === authUser.id ? { ...u, ...authUser, bio: u.bio || authUser.bio, avatar: u.avatar || authUser.avatar } : u)) : [authUser, ...users];
+  }, [users, authUser]);
+
+  // Current active authenticated user object
+  const currentUser = useMemo(() => {
+    if (!authUser) return null;
+    return allUsers.find((u) => u.id === authUser.id) || authUser;
+  }, [allUsers, authUser]);
+
   // User whose profile page is currently on screen
-  const viewedUser = users.find((u) => u.id === viewedUserId) || currentUser;
+  const viewedUser = useMemo(() => {
+    if (!currentUser) return null;
+    return allUsers.find((u) => u.id === viewedUserId) || currentUser;
+  }, [allUsers, viewedUserId, currentUser]);
 
-  // Movies of the currently viewed profile
-  const viewedUserMovies = movies.filter((m) => m.userId === viewedUser.id);
-  // Comments on the currently viewed profile
-  const viewedUserComments = comments.filter((c) => c.targetUserId === viewedUser.id);
+  // Movies & comments of the currently viewed profile
+  const viewedUserMovies = useMemo(
+    () => (viewedUser ? movies.filter((m) => m.userId === viewedUser.id) : []),
+    [movies, viewedUser]
+  );
+  const viewedUserComments = useMemo(
+    () => (viewedUser ? comments.filter((c) => c.targetUserId === viewedUser.id) : []),
+    [comments, viewedUser]
+  );
 
   // --- Handlers ---
-
-  const handleSelectUser = (user: User) => {
-    setCurrentUserId(user.id);
-    setViewedUserId(user.id);
-    showToast(`Conectado como ${user.name}`);
-  };
-
-  const handleRegisterUser = async (newUser: User) => {
-    setUsers((prev) => [newUser, ...prev.filter((u) => u.id !== newUser.id)]);
-    setCurrentUserId(newUser.id);
-    setViewedUserId(newUser.id);
-    setActiveTab('my-profile');
-    showToast(`Bem-vindo ao Lumina, ${newUser.name}! Seu cadastro foi concluído no Supabase.`);
-    await supabaseService.updateProfile(newUser);
-  };
 
   const handleSelectUserToView = (user: User) => {
     setViewedUserId(user.id);
@@ -144,8 +160,8 @@ export default function HomePage() {
   const handleSaveMovie = async (
     movieData: Omit<Movie, 'id' | 'createdAt' | 'likesCount' | 'likedBy'> & { id?: string }
   ) => {
+    if (!currentUser) return;
     if (movieData.id) {
-      // Editing existing movie
       const target = movies.find((m) => m.id === movieData.id);
       const updatedMovie: Movie = {
         ...(target || (movieData as any)),
@@ -155,7 +171,6 @@ export default function HomePage() {
       await supabaseService.saveMovie(updatedMovie, currentUser);
       showToast(`Filme "${movieData.title}" atualizado no Supabase!`);
     } else {
-      // Adding new movie directly into Supabase
       const newMovie: Movie = {
         ...movieData,
         id: `mov_${Date.now()}`,
@@ -179,6 +194,7 @@ export default function HomePage() {
   };
 
   const handleToggleLikeMovie = async (movieId: string) => {
+    if (!currentUser) return;
     const target = movies.find((m) => m.id === movieId);
     if (!target) return;
     const alreadyLiked = target.likedBy?.includes(currentUser.id);
@@ -205,6 +221,7 @@ export default function HomePage() {
     movieTitle?: string;
     content: string;
   }) => {
+    if (!currentUser) return;
     const newComm: Comment = {
       id: `comm_${Date.now()}`,
       targetUserId,
@@ -232,6 +249,7 @@ export default function HomePage() {
   };
 
   const handleToggleLikeComment = async (commentId: string) => {
+    if (!currentUser) return;
     const target = comments.find((c) => c.id === commentId);
     if (!target) return;
     const alreadyLiked = target.likedBy?.includes(currentUser.id);
@@ -248,85 +266,73 @@ export default function HomePage() {
   };
 
   const handleSaveProfile = async (updatedData: Partial<User>) => {
+    if (!currentUser) return;
     const updatedUser = { ...currentUser, ...updatedData };
-    setUsers((prev) => prev.map((u) => (u.id === currentUser.id ? updatedUser : u)));
+    setAuthUser(updatedUser);
+    setUsers((prev) => {
+      const exists = prev.some((u) => u.id === updatedUser.id);
+      return exists ? prev.map((u) => (u.id === updatedUser.id ? updatedUser : u)) : [updatedUser, ...prev];
+    });
     await supabaseService.updateProfile(updatedUser);
     showToast('Perfil atualizado no Supabase com sucesso!');
   };
 
   const handleLoginSuccess = async (user: User) => {
-    setUsers((prev) => {
-      const exists = prev.some((u) => u.id === user.id);
-      return exists ? prev.map((u) => (u.id === user.id ? user : u)) : [user, ...prev];
-    });
-    setCurrentUserId(user.id);
+    setAuthUser(user);
     setViewedUserId(user.id);
-    setIsAuthenticated(true);
-    showToast(`Autenticado com sucesso via Supabase! Bem-vindo(a), ${user.name}.`);
-
-    // Reload latest cloud data
+    setActiveTab('my-profile');
+    showToast(`Autenticado via Supabase Auth! Bem-vindo(a), ${user.name}.`);
     await loadCloudData();
   };
 
-  const handleLoginAsVisitor = async (name: string, bio: string, avatar: string) => {
-    const visitorUser = await supabaseService.saveVisitorProfile({ name, bio, avatar });
-    setUsers((prev) => {
-      const exists = prev.some((u) => u.id === visitorUser.id);
-      return exists ? prev.map((u) => (u.id === visitorUser.id ? visitorUser : u)) : [visitorUser, ...prev];
-    });
-    setCurrentUserId(visitorUser.id);
-    setViewedUserId(visitorUser.id);
-    setIsAuthenticated(true);
-    showToast(`Bem-vindo(a), ${visitorUser.name}! Conectado via Supabase.`);
-  };
-
-  const handleSelectUserFromLogin = (user: User) => {
-    handleSelectUser(user);
-    setIsAuthenticated(true);
-    loadCloudData();
-  };
-
-  const handleLogout = () => {
-    supabaseService.signOut();
-    setIsAuthenticated(false);
-    showToast('Você saiu da sua conta. Até logo!');
+  const handleLogout = async () => {
+    const { error } = await supabaseService.signOut();
+    if (error) {
+      showToast(`Erro ao sair: ${error}`);
+      return;
+    }
+    setAuthUser(null);
+    setViewedUserId('');
+    showToast('Sessão encerrada no Supabase Auth. Até logo!');
   };
 
   const handleDeleteUser = async (userId: string) => {
-    const userToDelete = users.find((u) => u.id === userId);
+    const userToDelete = allUsers.find((u) => u.id === userId);
     setUsers((prev) => prev.filter((u) => u.id !== userId));
     setMovies((prev) => prev.filter((m) => m.userId !== userId));
     setComments((prev) => prev.filter((c) => c.targetUserId !== userId && c.authorId !== userId));
 
     await supabaseService.deleteProfile(userId);
 
-    if (currentUserId === userId) {
-      setIsAuthenticated(false);
-      const remaining = users.filter((u) => u.id !== userId);
-      const nextUser = remaining[0] || INITIAL_USERS[0];
-      setCurrentUserId(nextUser.id);
-      setViewedUserId(nextUser.id);
-      showToast(`O perfil de "${userToDelete?.name || 'usuário'}" foi excluído do Supabase.`);
-    } else {
-      if (viewedUserId === userId) {
-        setViewedUserId(currentUserId);
-      }
+    if (currentUser?.id === userId) {
+      await supabaseService.signOut();
+      setAuthUser(null);
+      setViewedUserId('');
       showToast(`O perfil de "${userToDelete?.name || 'usuário'}" foi excluído.`);
     }
   };
 
-  // If not authenticated, the app starts directly with the Cinema Login Screen
-  if (!isAuthenticated) {
+  // Loading state while verifying real Supabase Auth session on page load
+  if (isCheckingAuth) {
+    return (
+      <div className="min-h-screen w-full bg-[#060D0B] flex flex-col items-center justify-center p-6 text-[#F0FDF8]">
+        <div className="w-14 h-14 rounded-2xl bg-[#0D1F1C] border border-[#00D2FF]/40 flex items-center justify-center shadow-[0_0_24px_rgba(0,210,255,0.25)] mb-4">
+          <RefreshCw className="w-7 h-7 text-[#00D2FF] animate-spin" />
+        </div>
+        <h2 className="text-base font-bold tracking-tight">Verificando sessão no Supabase Auth...</h2>
+        <p className="text-xs text-[#94A8A3] mt-1">Conectando de forma segura ao seu projeto.</p>
+      </div>
+    );
+  }
+
+  // If no real Supabase Auth session is active, show LoginScreen
+  if (!authUser || !currentUser || !viewedUser) {
     return (
       <>
         <LoginScreen
-          allUsers={users}
           onLoginSuccess={handleLoginSuccess}
-          onLoginAsVisitor={handleLoginAsVisitor}
-          onSelectExistingUser={handleSelectUserFromLogin}
-          onDeleteUser={handleDeleteUser}
-          onRefreshData={loadCloudData}
-          isLoadingData={isLoadingData}
+          configError={authConfigError}
+          onCredentialsUpdated={() => setCredsVersion((v) => v + 1)}
         />
 
         {toastMessage && (
@@ -355,7 +361,7 @@ export default function HomePage() {
         onLogout={handleLogout}
         searchTerm={searchTerm}
         setSearchTerm={setSearchTerm}
-        allUsers={users}
+        allUsers={allUsers}
       />
 
       {/* Main Viewport Container */}
@@ -387,7 +393,7 @@ export default function HomePage() {
 
         {activeTab === 'community' && (
           <CommunityView
-            users={users}
+            users={allUsers}
             movies={movies}
             currentUser={currentUser}
             onSelectUserToView={handleSelectUserToView}
@@ -397,7 +403,7 @@ export default function HomePage() {
         {activeTab === 'all-movies' && (
           <AllMoviesFeed
             movies={movies}
-            users={users}
+            users={allUsers}
             currentUser={currentUser}
             comments={comments}
             onOpenMovieDetails={(mov) => setSelectedMovieForDetails(mov)}
@@ -413,7 +419,7 @@ export default function HomePage() {
         {activeTab === 'guestbook-feed' && (
           <GuestbookFeed
             comments={comments}
-            users={users}
+            users={allUsers}
             movies={movies}
             currentUser={currentUser}
             onToggleLikeComment={handleToggleLikeComment}
@@ -459,10 +465,8 @@ export default function HomePage() {
         isOpen={isAuthModalOpen}
         onClose={() => setIsAuthModalOpen(false)}
         currentUser={currentUser}
-        allUsers={users}
-        onSelectUser={handleSelectUser}
-        onRegisterUser={handleRegisterUser}
-        onDeleteUser={handleDeleteUser}
+        onAuthenticatedUser={handleLoginSuccess}
+        onLogout={handleLogout}
       />
 
       <AddEditMovieModal
@@ -481,7 +485,7 @@ export default function HomePage() {
         movie={selectedMovieForDetails}
         onClose={() => setSelectedMovieForDetails(null)}
         currentUser={currentUser}
-        allUsers={users}
+        allUsers={allUsers}
         comments={comments}
         onToggleLike={handleToggleLikeMovie}
         onAddComment={handleAddComment}

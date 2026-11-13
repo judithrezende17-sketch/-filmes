@@ -222,7 +222,7 @@ export function Navbar({
                       className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-semibold text-[#F0FDF8] hover:bg-[#0D1F1C] rounded-lg transition-colors text-left"
                     >
                       <LogIn className="w-4 h-4 text-[#00D2FF]" />
-                      Trocar Perfil / Cadastro Rápido
+                      Trocar Conta / Nova Conta
                     </button>
 
                     {onLogout && (
@@ -239,10 +239,10 @@ export function Navbar({
                     )}
                   </div>
 
-                  {/* Quick switch to another persona */}
+                  {/* Quick visit another profile */}
                   <div className="mt-2 pt-2 border-t border-white/[0.08]">
                     <p className="text-[11px] font-bold text-[#94A8A3] px-3 mb-1.5 uppercase tracking-wider">
-                      Alternar Cinéfilo:
+                      Visitar Perfil na Rede:
                     </p>
                     <div className="space-y-1">
                       {allUsers.slice(0, 3).map((u) => (
